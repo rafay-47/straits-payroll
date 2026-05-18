@@ -1,0 +1,336 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ============================================
+    // HELPER FUNCTIONS
+    // ============================================
+    
+    // Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Get current user's data
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    // Get user role
+    function getUserRole() {
+      return getUserData().role;
+    }
+    
+    // Get user's company ID
+    function getCompanyId() {
+      return getUserData().companyId;
+    }
+    
+    // ============================================
+    // ROLE CHECKS
+    // ============================================
+    
+    function isSuperAdmin() {
+      return isAuthenticated() && getUserRole() == 'superadmin';
+    }
+    
+    function isCompanyAdmin() {
+      return isAuthenticated() && getUserRole() == 'companyadmin';
+    }
+    
+    function isSupervisor() {
+      return isAuthenticated() && getUserRole() == 'supervisor';
+    }
+    
+    function isEmployee() {
+      return isAuthenticated() && getUserRole() == 'employee';
+    }
+    
+    // Backward compatibility
+    function isAdmin() {
+      return isCompanyAdmin() || isSuperAdmin();
+    }
+    
+    function isCompanyAdminOrSupervisor() {
+      return isCompanyAdmin() || isSupervisor();
+    }
+    
+    // ============================================
+    // COMPANY ISOLATION CHECKS
+    // ============================================
+    
+    // Check if user belongs to the same company
+    function isSameCompany(companyId) {
+      return !isSuperAdmin() && getCompanyId() == companyId;
+    }
+    
+    // Check if user can access company data (same company or super admin)
+    function canAccessCompany(companyId) {
+      return isSuperAdmin() || isSameCompany(companyId);
+    }
+    
+    // Check if user owns the resource
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Check if user status is approved/active
+    function isApprovedUser() {
+      return isAuthenticated() && 
+             (getUserData().status == 'approved' || getUserData().status == 'active');
+    }
+    
+    // Check if supervisor manages this employee
+    function isSupervisorOf(employeeId) {
+      return isSupervisor() && 
+             get(/databases/$(database)/documents/users/$(employeeId)).data.supervisorId == request.auth.uid;
+    }
+    
+    // ============================================
+    // COMPANIES COLLECTION (NEW)
+    // ============================================
+    match /companies/{companyId} {
+      // Read: Super admin sees all, company admin sees their own company
+      allow read: if isSuperAdmin() || 
+                     (isCompanyAdmin() && isSameCompany(companyId));
+      
+      // Create: Only super admin can create companies
+      allow create: if isSuperAdmin() &&
+                       request.resource.data.keys().hasAll(['id', 'name', 'companyCode', 'status']) &&
+                       request.resource.data.id == companyId &&
+                       request.resource.data.createdBy == request.auth.uid;
+      
+      // Update: Super admin can update any, company admin can update their own
+      allow update: if isSuperAdmin() || 
+                       (isCompanyAdmin() && isSameCompany(companyId) &&
+                        // Company admin cannot change critical fields
+                        request.resource.data.companyCode == resource.data.companyCode &&
+                        request.resource.data.createdBy == resource.data.createdBy);
+      
+      // Delete: Only super admin (use with caution)
+      allow delete: if isSuperAdmin();
+    }
+    
+    // ============================================
+    // USERS COLLECTION (UPDATED)
+    // ============================================
+    match /users/{userId} {
+      // Read: Super admin sees all, users see their own, company admin/supervisor see same company
+      allow read: if isSuperAdmin() || 
+                     isOwner(userId) || 
+                     (canAccessCompany(resource.data.companyId) && isCompanyAdminOrSupervisor());
+      
+      // Create: Super admin creates any, company admin/supervisor create in their company
+      allow create: if (isSuperAdmin() ||
+                        (isCompanyAdminOrSupervisor() && 
+                         request.resource.data.companyId == getCompanyId())) &&
+                       request.resource.data.keys().hasAll(['uid', 'companyId', 'role', 'name', 'email', 'status']) &&
+                       request.resource.data.uid == userId;
+      
+      // Update: Super admin updates any, users update own profile, company admin updates same company
+      allow update: if isSuperAdmin() ||
+                       (isOwner(userId) && 
+                        // Users can't change role, status, or companyId
+                        request.resource.data.role == resource.data.role &&
+                        request.resource.data.status == resource.data.status &&
+                        request.resource.data.companyId == resource.data.companyId) ||
+                       (isCompanyAdmin() && canAccessCompany(resource.data.companyId));
+      
+      // Delete: Only super admin and company admin (for same company)
+      allow delete: if isSuperAdmin() || 
+                       (isCompanyAdmin() && canAccessCompany(resource.data.companyId));
+    }
+    
+    // ============================================
+    // PROJECTS COLLECTION (UPDATED)
+    // ============================================
+    match /projects/{projectId} {
+      // Read: Super admin sees all, others see same company only
+      allow read: if isSuperAdmin() || 
+                     (isAuthenticated() && canAccessCompany(resource.data.companyId));
+      
+      // Create: Super admin creates any, company admin creates in their company
+      allow create: if (isSuperAdmin() ||
+                        (isCompanyAdmin() && request.resource.data.companyId == getCompanyId())) &&
+                       request.resource.data.keys().hasAll(['projectId', 'companyId', 'name']) &&
+                       request.resource.data.projectId == projectId;
+      
+      // Update: Super admin updates any, company admin updates same company
+      allow update: if isSuperAdmin() || 
+                       (isCompanyAdmin() && canAccessCompany(resource.data.companyId));
+      
+      // Delete: Super admin or company admin (same company)
+      allow delete: if isSuperAdmin() || 
+                       (isCompanyAdmin() && canAccessCompany(resource.data.companyId));
+    }
+    
+    // ============================================
+    // ATTENDANCE COLLECTION (UPDATED)
+    // ============================================
+    match /attendance/{attendanceId} {
+      // Read: Super admin sees all, others see same company only
+      allow read: if isSuperAdmin() || 
+                     (isAuthenticated() && canAccessCompany(resource.data.companyId));
+      
+      // Create: Employee creates own (same company), supervisor/admin create manual
+      allow create: if request.resource.data.companyId == getCompanyId() &&
+                       ((isEmployee() && 
+                         isApprovedUser() &&
+                         request.resource.data.userId == request.auth.uid) ||
+                        (isCompanyAdminOrSupervisor() && 
+                         request.resource.data.checkInMethod == 'manual'));
+      
+      // Update: Super admin updates any, company admin/supervisor update same company
+      allow update: if isSuperAdmin() || 
+                       (canAccessCompany(resource.data.companyId) && 
+                        (isOwner(resource.data.userId) || isCompanyAdminOrSupervisor()));
+      
+      // Delete: Only super admin
+      allow delete: if isSuperAdmin();
+    }
+    
+    // ============================================
+    // DOCUMENTS COLLECTION (TOP-LEVEL - LEGACY)
+    // ============================================
+    match /documents/{documentId} {
+      // Read: Super admin sees all, others see same company only
+      allow read: if isSuperAdmin() || 
+                     (isAuthenticated() && canAccessCompany(resource.data.companyId));
+      
+      // Create: Supervisor/company admin upload for same company
+      allow create: if (isSuperAdmin() ||
+                        (isCompanyAdminOrSupervisor() && 
+                         request.resource.data.companyId == getCompanyId())) &&
+                       request.resource.data.uploadedBy == request.auth.uid;
+      
+      // Update: Super admin or company admin (same company)
+      allow update: if isSuperAdmin() || 
+                       (isCompanyAdmin() && canAccessCompany(resource.data.companyId));
+      
+      // Delete: Super admin or uploader (same company)
+      allow delete: if isSuperAdmin() || 
+                       (canAccessCompany(resource.data.companyId) && 
+                        (isCompanyAdmin() || resource.data.uploadedBy == request.auth.uid));
+    }
+    
+    // ============================================
+    // DOCUMENTS SUBCOLLECTION (ACTUAL PATH)
+    // Path: /users/{userId}/documents/{documentId}
+    // ============================================
+    match /users/{userId}/documents/{documentId} {
+      // Helper: get the employee's data
+      function getEmployeeData() {
+        return get(/databases/$(database)/documents/users/$(userId)).data;
+      }
+      
+      // Helper: check if current user is the immediate supervisor of this employee
+      function isImmediateSupervisor() {
+        return isSupervisor() && getEmployeeData().supervisorId == request.auth.uid;
+      }
+      
+      // Helper: check if current user is company admin of this employee's company
+      function isEmployeeCompanyAdmin() {
+        return isCompanyAdmin() && getCompanyId() == getEmployeeData().companyId;
+      }
+      
+      // Read: 
+      //   - Super admin sees all
+      //   - Employee sees only their own documents
+      //   - Immediate supervisor sees their assigned employee's documents
+      //   - Company admin sees documents for employees in their company
+      allow read: if isSuperAdmin() || 
+                     isOwner(userId) || 
+                     isImmediateSupervisor() ||
+                     isEmployeeCompanyAdmin();
+      
+      // Create:
+      //   - Super admin can create any
+      //   - Immediate supervisor can upload for their assigned employees
+      //   - Company admin can upload for employees in their company
+      //   - Employee can upload their own documents
+      allow create: if isSuperAdmin() ||
+                       (isOwner(userId) && 
+                        request.resource.data.companyId == getCompanyId()) ||
+                       (isImmediateSupervisor() && 
+                        request.resource.data.companyId == getCompanyId() &&
+                        request.resource.data.uploadedBy == request.auth.uid) ||
+                       (isEmployeeCompanyAdmin() && 
+                        request.resource.data.uploadedBy == request.auth.uid);
+      
+      // Update: Super admin, company admin of same company, or immediate supervisor
+      allow update: if isSuperAdmin() || 
+                       isEmployeeCompanyAdmin() ||
+                       isImmediateSupervisor();
+      
+      // Delete: Super admin, company admin of same company, or the original uploader (if supervisor)
+      allow delete: if isSuperAdmin() || 
+                       isEmployeeCompanyAdmin() ||
+                       (isImmediateSupervisor() && resource.data.uploadedBy == request.auth.uid);
+    }
+    
+    // ============================================
+    // DEVICE RESET REQUESTS (UPDATED)
+    // ============================================
+    match /deviceResetRequests/{requestId} {
+      // Read: Super admin sees all, others see same company
+      allow read: if isSuperAdmin() || 
+                     (isAuthenticated() && canAccessCompany(resource.data.companyId));
+      
+      // Create: Employee creates own request (same company)
+      allow create: if isEmployee() &&
+                       request.resource.data.companyId == getCompanyId() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.status == 'pending';
+      
+      // Update: Super admin or company admin/supervisor (same company)
+      allow update: if isSuperAdmin() || 
+                       (canAccessCompany(resource.data.companyId) && isCompanyAdminOrSupervisor());
+      
+      // Delete: Only super admin
+      allow delete: if isSuperAdmin();
+    }
+    
+    // ============================================
+    // AUDIT LOGS COLLECTION (UPDATED)
+    // ============================================
+    match /auditLogs/{logId} {
+      // Read: Super admin sees all, company admin sees their company logs
+      allow read: if isSuperAdmin() || 
+                     (isCompanyAdmin() && 
+                      resource.data.companyId != null && 
+                      canAccessCompany(resource.data.companyId));
+      
+      // Create: Authenticated users can create logs
+      // companyId can be null for super admin actions
+      allow create: if isAuthenticated() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       (request.resource.data.companyId == null || 
+                        request.resource.data.companyId == getCompanyId() ||
+                        isSuperAdmin());
+      
+      // Update/Delete: Logs are immutable
+      allow update, delete: if false;
+    }
+    
+    // ============================================
+    // SYSTEM SETTINGS COLLECTION
+    // ============================================
+    match /systemSettings/{docId} {
+      // Read: All authenticated users
+      allow read: if isAuthenticated();
+      
+      // Write: Only super admin
+      allow create, update: if isSuperAdmin();
+      
+      // Delete: Not allowed
+      allow delete: if false;
+    }
+    
+    // ============================================
+    // DENY ALL OTHER PATHS
+    // ============================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

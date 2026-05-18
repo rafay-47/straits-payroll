@@ -1,0 +1,1 @@
+export '../../shared/constants/app_colors.dart';

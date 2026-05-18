@@ -1,0 +1,213 @@
+rules_version = '2';
+
+// Firebase Storage Security Rules for Multi-Tenant System
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // ============================================
+    // HELPER FUNCTIONS
+    // ============================================
+    
+    // Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Get user document from Firestore
+    function getUserData() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    // Get user role
+    function getUserRole() {
+      return getUserData().role;
+    }
+    
+    // Get user's company ID
+    function getCompanyId() {
+      return getUserData().companyId;
+    }
+    
+    // Check if user is Super Admin
+    function isSuperAdmin() {
+      return isAuthenticated() && getUserRole() == 'superadmin';
+    }
+    
+    // Check if user is Company Admin
+    function isCompanyAdmin() {
+      return isAuthenticated() && getUserRole() == 'companyadmin';
+    }
+    
+    // Check if user is Supervisor
+    function isSupervisor() {
+      return isAuthenticated() && getUserRole() == 'supervisor';
+    }
+    
+    // Check if user belongs to the same company
+    function isSameCompany(companyId) {
+      return getCompanyId() == companyId;
+    }
+    
+    // Validate file size (max 10MB)
+    function isValidFileSize() {
+      return request.resource.size < 10 * 1024 * 1024;
+    }
+    
+    // Validate image file types
+    function isValidImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+    
+    // Validate document file types
+    function isValidDocument() {
+      return request.resource.contentType.matches('(application/pdf|image/.*|application/msword|application/vnd.openxmlformats-officedocument.wordprocessingml.document)');
+    }
+    
+    
+    // ============================================
+    // COMPANY LOGOS
+    // Path: /companies/{companyId}/logo/{fileName}
+    // ============================================
+    match /companies/{companyId}/logo/{fileName} {
+      // Super Admin can upload/update/delete company logos
+      allow write: if isSuperAdmin() && isValidImage() && isValidFileSize();
+      
+      // Company Admin can upload/update their own company logo
+      allow write: if isCompanyAdmin() && isSameCompany(companyId) && isValidImage() && isValidFileSize();
+      
+      // Anyone authenticated can read company logos
+      allow read: if isAuthenticated();
+    }
+    
+    
+    // ============================================
+    // EMPLOYEE PROFILE PICTURES
+    // Path: /companies/{companyId}/employees/{userId}/profile/{fileName}
+    // ============================================
+    match /companies/{companyId}/employees/{userId}/profile/{fileName} {
+      // Super Admin can manage all profile pictures
+      allow write: if isSuperAdmin() && isValidImage() && isValidFileSize();
+      
+      // Company Admin and Supervisors can manage profiles in their company
+      allow write: if (isCompanyAdmin() || isSupervisor()) 
+                      && isSameCompany(companyId) 
+                      && isValidImage() 
+                      && isValidFileSize();
+      
+      // Employee can update their own profile picture
+      allow write: if isAuthenticated() 
+                      && request.auth.uid == userId 
+                      && isSameCompany(companyId) 
+                      && isValidImage() 
+                      && isValidFileSize();
+      
+      // Anyone in the same company can read profile pictures
+      allow read: if isSuperAdmin() || isSameCompany(companyId);
+    }
+    
+    
+    // ============================================
+    // EMPLOYEE DOCUMENTS
+    // Path: /companies/{companyId}/documents/{userId}/{documentType}/{fileName}
+    // ============================================
+    match /companies/{companyId}/documents/{userId}/{documentType}/{fileName} {
+      // Super Admin can manage all documents
+      allow write: if isSuperAdmin() && isValidDocument() && isValidFileSize();
+      
+      // Company Admin can upload/manage documents for employees in their company
+      allow write: if isCompanyAdmin() 
+                      && isSameCompany(companyId) 
+                      && isValidDocument() 
+                      && isValidFileSize();
+      
+      // Supervisors can upload documents for employees in their company
+      // (Firestore rules enforce that they can only access their assigned employees)
+      allow write: if isSupervisor() 
+                      && isSameCompany(companyId) 
+                      && isValidDocument() 
+                      && isValidFileSize();
+      
+      // Employees can upload their own documents only
+      allow write: if isAuthenticated() 
+                      && request.auth.uid == userId
+                      && isSameCompany(companyId) 
+                      && isValidDocument() 
+                      && isValidFileSize();
+      
+      // Read: Super admin sees all, others must be in same company
+      // Supervisor/employee-level read restriction enforced by Firestore (no direct Storage listing)
+      allow read: if isSuperAdmin() || (isAuthenticated() && isSameCompany(companyId));
+    }
+    
+    
+    // ============================================
+    // PROJECT IMAGES
+    // Path: /companies/{companyId}/projects/{projectId}/images/{fileName}
+    // ============================================
+    match /companies/{companyId}/projects/{projectId}/images/{fileName} {
+      // Super Admin can manage all project images
+      allow write: if isSuperAdmin() && isValidImage() && isValidFileSize();
+      
+      // Company Admin and Supervisors can upload project images for their company
+      allow write: if (isCompanyAdmin() || isSupervisor()) 
+                      && isSameCompany(companyId) 
+                      && isValidImage() 
+                      && isValidFileSize();
+      
+      // Anyone in the same company can read project images
+      allow read: if isSuperAdmin() || (isAuthenticated() && isSameCompany(companyId));
+    }
+    
+    
+    // ============================================
+    // ATTENDANCE PHOTOS (Check-in/Check-out selfies)
+    // Path: /companies/{companyId}/attendance/{attendanceId}/{fileName}
+    // ============================================
+    match /companies/{companyId}/attendance/{attendanceId}/{fileName} {
+      // Super Admin can manage all attendance photos
+      allow write: if isSuperAdmin() && isValidImage() && isValidFileSize();
+      
+      // Company Admin and Supervisors can manage attendance photos in their company
+      allow write: if (isCompanyAdmin() || isSupervisor()) 
+                      && isSameCompany(companyId) 
+                      && isValidImage() 
+                      && isValidFileSize();
+      
+      // Employees can upload their own check-in/out photos
+      allow write: if isAuthenticated() 
+                      && isSameCompany(companyId) 
+                      && isValidImage() 
+                      && isValidFileSize();
+      
+      // Anyone in the same company can read attendance photos
+      allow read: if isSuperAdmin() || (isAuthenticated() && isSameCompany(companyId));
+    }
+    
+    
+    // ============================================
+    // TEMPORARY/PUBLIC FILES (if needed)
+    // Path: /public/{fileName}
+    // ============================================
+    match /public/{fileName} {
+      // Anyone authenticated can upload to public (with limits)
+      allow write: if isAuthenticated() && isValidFileSize();
+      
+      // Anyone can read public files
+      allow read: if true;
+    }
+    
+    
+    // ============================================
+    // DENY ALL OTHER PATHS BY DEFAULT
+    // ============================================
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+
+
+
+
+
