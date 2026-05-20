@@ -523,7 +523,13 @@ class _EmployeeManagementScreenState
     showDialog(
       context: context,
       builder: (context) => const AddEmployeeDialog(),
-    ).then((_) {
+    ).then((created) {
+      if (created == true && mounted) {
+        setState(() {
+          _searchQuery = '';
+        });
+        _tabController.animateTo(0);
+      }
       // Refresh list after dialog closes
       ref.invalidate(allUsersProvider);
     });

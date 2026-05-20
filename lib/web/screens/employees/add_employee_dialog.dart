@@ -298,8 +298,9 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
                   const SizedBox(height: 24),
                 ],
 
-                // Project Assignment (for supervisors and employees)
-                if (_selectedRole != 'admin') ...[
+                // Project Assignment (required for employees, optional for supervisor edits)
+                if (_selectedRole == 'employee' ||
+                    (_isEditMode && _selectedRole == 'supervisor')) ...[
                   const Text(
                     'Project Assignment',
                     style: TextStyle(
@@ -364,7 +365,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
                           const SizedBox(height: 8),
                           Text(
                             _selectedRole == 'supervisor'
-                                ? 'Supervisor can be assigned to multiple projects'
+                                ? 'Optional: assign projects to this supervisor'
                                 : 'Employee can be assigned to multiple projects',
                             style: const TextStyle(fontSize: 12, color: Colors.grey),
                           ),
@@ -543,7 +544,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
       }
 
       if (mounted) {
-        Navigator.pop(context);
+        Navigator.pop(context, true);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -604,10 +605,6 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
     if (companyId == null || companyId.isEmpty) {
       throw 'Company ID not found. Please contact support.';
     }
-    final creatorRole = currentUser.role.toLowerCase();
-    final creatorCanAutoApprove = creatorRole == 'companyadmin' ||
-        creatorRole == 'admin' ||
-        creatorRole == 'superadmin';
     final normalizedEmail = _emailController.text.trim().toLowerCase();
     final emailAvailable = await firestoreService.isEmailAvailable(
       companyId: companyId,
@@ -699,7 +696,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
       status: (_selectedRole == 'supervisor' ||
                   _selectedRole == 'admin' ||
                   _selectedRole == 'companyadmin')
-          ? (creatorCanAutoApprove ? 'approved' : 'pending')
+          ? 'approved'
           : 'pending',
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
@@ -768,11 +765,6 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
 
   Future<void> _handleUpdate(FirestoreService firestoreService) async {
     final currentUser = ref.read(currentUserProvider).value;
-    final editorRole = currentUser?.role.toLowerCase();
-    final editorCanAutoApprove = editorRole == 'companyadmin' ||
-        editorRole == 'admin' ||
-        editorRole == 'superadmin';
-
     final companyId = widget.userToEdit!.companyId;
     if (companyId == null || companyId.isEmpty) {
       throw 'Company ID missing for this user.';
@@ -803,7 +795,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
       'email': _emailController.text.trim(),
       'role': _selectedRole,
       'status': (_selectedRole == 'supervisor' || _selectedRole == 'admin' || _selectedRole == 'companyadmin')
-          ? (editorCanAutoApprove ? 'approved' : 'pending')
+          ? 'approved'
           : (widget.userToEdit!.status),
       'phoneNumber': _phoneController.text.trim().isEmpty 
           ? null 

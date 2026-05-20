@@ -1,25 +1,22 @@
 # Netlify Configuration for Flutter Web App
-# This file configures Netlify to build and deploy your Flutter web dashboard
 
 [build]
-  # Build command - builds Flutter web app
-  command = "flutter build web --release --web-renderer canvaskit"
-  
-  # Publish directory - where Flutter outputs the web build
-  publish = "build/web"
-  
-  # Environment variables (if needed)
-  # [build.environment]
-  #   FLUTTER_VERSION = "3.6.2"
+  command = """
+    git clone https://github.com/flutter/flutter.git --depth 1 -b stable $HOME/flutter &&
+    export PATH="$PATH:$HOME/flutter/bin" &&
+    flutter config --enable-web &&
+    flutter pub get &&
+    flutter build web --release
+  """
 
-# Redirect rules for Single Page Application (SPA)
-# All routes redirect to index.html so Flutter router can handle them
+  publish = "build/web"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
 
-# Headers for security and performance
+# Security headers
 [[headers]]
   for = "/*"
   [headers.values]
@@ -29,13 +26,13 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "geolocation=(), microphone=(), camera=()"
 
-# Cache static assets
+# Cache assets
 [[headers]]
   for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
 
-# Service worker and bootstrap must not be cached -- they control update detection
+# Critical Flutter files should not be cached
 [[headers]]
   for = "/flutter_service_worker.js"
   [headers.values]
@@ -56,33 +53,8 @@
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
 
-[[headers]]
-  for = "/*.css"
-  [headers.values]
-    Cache-Control = "public, max-age=31536000, immutable"
-
-[[headers]]
-  for = "/*.wasm"
-  [headers.values]
-    Cache-Control = "public, max-age=31536000, immutable"
-
-# Don't cache HTML
+# HTML should not be cached
 [[headers]]
   for = "/*.html"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
-
-# Plugin configuration (optional - for better Flutter support)
-# [build.processing]
-#   skip_processing = false
-
-# [build.processing.css]
-#   bundle = true
-#   minify = true
-
-# [build.processing.js]
-#   bundle = true
-#   minify = true
-
-# [build.processing.html]
-#   pretty_urls = true
