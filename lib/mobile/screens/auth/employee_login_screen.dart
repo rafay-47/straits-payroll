@@ -448,6 +448,22 @@ class _EmployeeLoginScreenState extends ConsumerState<EmployeeLoginScreen> {
 
                       const SizedBox(height: 16),
 
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Forgot PIN? Please contact your supervisor or company admin to reset it.',
+                                ),
+                              ),
+                            );
+                          },
+                          child: const Text('Forgot PIN?'),
+                        ),
+                      ),
+
                       // Back Button
                       TextButton(
                         onPressed: () {

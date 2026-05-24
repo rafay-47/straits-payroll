@@ -6,6 +6,7 @@ import '../models/attendance_model.dart';
 import '../models/document_model.dart';
 import '../models/device_reset_request_model.dart';
 import '../models/audit_log_model.dart';
+import '../models/password_reset_request_model.dart';
 import '../constants/app_constants.dart';
 
 /// Service for all Firestore database operations
@@ -773,6 +774,46 @@ class FirestoreService {
     }
   }
 
+  /// Change PIN for an employee account after validating current PIN.
+  Future<void> changeEmployeePin({
+    required String userId,
+    required String currentPin,
+    required String newPin,
+  }) async {
+    try {
+      if (newPin.length < 4 || newPin.length > 6) {
+        throw 'PIN must be 4-6 digits';
+      }
+      if (!RegExp(r'^\d+$').hasMatch(newPin)) {
+        throw 'PIN must contain only digits';
+      }
+
+      final userDoc = await _firestore
+          .collection(AppConstants.usersCollection)
+          .doc(userId)
+          .get();
+
+      if (!userDoc.exists) {
+        throw 'User not found';
+      }
+
+      final data = userDoc.data()!;
+      final role = data['role'] as String?;
+      if (role != AppConstants.roleEmployee) {
+        throw 'Only employee PIN can be changed from this flow';
+      }
+
+      final storedPin = data['pin'] as String?;
+      if (storedPin == null || storedPin != currentPin) {
+        throw 'Current PIN is incorrect';
+      }
+
+      await updateUser(userId, {'pin': newPin});
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   /// Validate whether a custom ID is unique within a company.
   /// Duplicate custom IDs are blocked for employees, supervisors, and company admins.
   Future<bool> isCustomIdAvailable({
@@ -915,6 +956,150 @@ class FirestoreService {
       if (e is String) rethrow;
       throw 'Failed to resolve login: $e';
     }
+  }
+
+  /// Find a user by email within allowed roles and optional company.
+  Future<UserModel?> getUserByEmail({
+    required String email,
+    String? companyId,
+    List<String> allowedRoles = const ['companyadmin', 'admin', 'supervisor'],
+  }) async {
+    try {
+      final normalizedEmail = email.trim().toLowerCase();
+      if (normalizedEmail.isEmpty) return null;
+
+      final snapshot = await _firestore
+          .collection(AppConstants.usersCollection)
+          .where('email', isEqualTo: normalizedEmail)
+          .get();
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final role = (data['role'] as String? ?? '').toLowerCase();
+        if (!allowedRoles.contains(role)) continue;
+
+        if (companyId != null && companyId.isNotEmpty) {
+          final userCompanyId = data['companyId'] as String?;
+          final keys = await _resolveCompanyFilterKeys(companyId);
+          if (userCompanyId == null || !keys.contains(userCompanyId)) {
+            continue;
+          }
+        }
+
+        final user = UserModel.fromMap(data);
+        return user.uid.isEmpty ? user.copyWith(uid: doc.id) : user;
+      }
+
+      return null;
+    } catch (e) {
+      throw 'Failed to find user by email: $e';
+    }
+  }
+
+  /// Submit a password reset request that must be approved before reset email is sent.
+  Future<void> submitPasswordResetApprovalRequest({
+    required UserModel requester,
+    required String requesterEmail,
+  }) async {
+    try {
+      final requesterRole = requester.role.toLowerCase();
+      String pendingApproverRole;
+
+      if (requesterRole == 'companyadmin' || requesterRole == 'admin') {
+        pendingApproverRole = 'superadmin';
+      } else if (requesterRole == 'supervisor') {
+        pendingApproverRole = 'companyadmin';
+      } else {
+        throw 'Password reset approval is only supported for company admins and supervisors.';
+      }
+
+      final existing = await _firestore
+          .collection(AppConstants.passwordResetRequestsCollection)
+          .where('requesterUserId', isEqualTo: requester.uid)
+          .where('status', isEqualTo: 'pending')
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) {
+        throw 'A reset request is already pending approval.';
+      }
+
+      final docRef =
+          _firestore.collection(AppConstants.passwordResetRequestsCollection).doc();
+      final req = PasswordResetRequestModel(
+        requestId: docRef.id,
+        requesterUserId: requester.uid,
+        requesterName: requester.name,
+        requesterEmail: requesterEmail.trim().toLowerCase(),
+        requesterRole: requester.role.toLowerCase(),
+        companyId: requester.companyId,
+        pendingApproverRole: pendingApproverRole,
+        requestedAt: DateTime.now(),
+      );
+
+      await docRef.set(req.toMap());
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Get pending password reset requests for an approver.
+  Future<List<PasswordResetRequestModel>> getPendingPasswordResetRequestsForApprover({
+    required UserModel approver,
+  }) async {
+    try {
+      final approverRole = approver.role.toLowerCase();
+      String expectedRole;
+      if (approverRole == 'superadmin') {
+        expectedRole = 'superadmin';
+      } else if (approverRole == 'companyadmin' || approverRole == 'admin') {
+        expectedRole = 'companyadmin';
+      } else {
+        return [];
+      }
+
+      // Intentionally avoid multi-field indexed query so this works
+      // without requiring manual Firebase composite index creation.
+      final snapshot = await _firestore
+          .collection(AppConstants.passwordResetRequestsCollection)
+          .where('status', isEqualTo: 'pending')
+          .get();
+
+      var requests = snapshot.docs
+          .map((doc) => PasswordResetRequestModel.fromMap(doc.data()))
+          .where((r) => r.pendingApproverRole == expectedRole)
+          .toList();
+
+      if (expectedRole == 'companyadmin') {
+        final keys = approver.companyId == null
+            ? <String>{}
+            : await _resolveCompanyFilterKeys(approver.companyId!);
+        requests = requests
+            .where((r) => r.companyId != null && keys.contains(r.companyId))
+            .toList();
+      }
+
+      requests.sort((a, b) => b.requestedAt.compareTo(a.requestedAt));
+
+      return requests;
+    } catch (e) {
+      throw 'Failed to load reset requests: $e';
+    }
+  }
+
+  Future<void> markPasswordResetRequestApproved({
+    required String requestId,
+    required String approverId,
+  }) async {
+    await _firestore
+        .collection(AppConstants.passwordResetRequestsCollection)
+        .doc(requestId)
+        .update({
+      'status': 'approved',
+      'approvedBy': approverId,
+      'approvedAt': DateTime.now().toIso8601String(),
+      'emailSentAt': DateTime.now().toIso8601String(),
+    });
   }
 
   // ============================================

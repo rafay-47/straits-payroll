@@ -154,6 +154,71 @@ class _SupervisorLoginScreenState
     }
   }
 
+  Future<void> _handleForgotPassword() async {
+    if (_validatedCompany == null) {
+      setState(() {
+        _errorMessage = 'Please validate company code first';
+      });
+      return;
+    }
+
+    final identifier = _loginIdController.text.trim();
+    if (identifier.isEmpty) {
+      setState(() {
+        _errorMessage = 'Enter your email or supervisor ID first';
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final firestoreService = ref.read(firestoreServiceProvider);
+      final email = await firestoreService.resolveSupervisorOrAdminLoginEmail(
+        companyId: _validatedCompany!.id,
+        companyCode: _validatedCompany!.companyCode,
+        identifier: identifier,
+      );
+
+      final requester = await firestoreService.getUserByEmail(
+        email: email,
+        companyId: _validatedCompany!.id,
+        allowedRoles: const ['supervisor'],
+      );
+      if (requester == null) {
+        throw 'Supervisor account not found for this company.';
+      }
+
+      await firestoreService.submitPasswordResetApprovalRequest(
+        requester: requester,
+        requesterEmail: email,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Reset request submitted. Company Admin approval is required before email is sent.',
+          ),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } catch (e) {
+      setState(() {
+        _errorMessage = e.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
   /// Reset to company code entry
   void _resetToCompanyCode() {
     setState(() {
@@ -379,15 +444,17 @@ class _SupervisorLoginScreenState
                     Align(
                       alignment: Alignment.centerRight,
                       child: TextButton(
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Forgot password - Coming soon'),
-                            ),
-                          );
-                        },
+                        onPressed: _isLoading ? null : _handleForgotPassword,
                         child: Text(AppStrings.forgotPassword),
                       ),
+                    ),
+                    Text(
+                      'No email access? Request company admin to reset your access.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                      textAlign: TextAlign.center,
                     ),
 
                     const SizedBox(height: 20),

@@ -4,6 +4,7 @@ import '../../../shared/constants/app_colors.dart';
 import '../../../shared/services/auth_service.dart';
 import '../../../shared/services/company_service.dart';
 import '../../../shared/models/company_model.dart';
+import '../../../shared/providers/auth_provider.dart';
 import '../../../shared/widgets/company_logo_widget.dart';
 import '../dashboard/admin_dashboard_screen.dart';
 
@@ -88,6 +89,58 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
         _errorMessage = e.toString();
         _isLoading = false;
       });
+    }
+  }
+
+  Future<void> _handleForgotPassword() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) {
+      setState(() {
+        _errorMessage = 'Please enter your email first';
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final firestoreService = ref.read(firestoreServiceProvider);
+      final requester = await firestoreService.getUserByEmail(
+        email: email,
+        companyId: _companyCodeController.text.trim().toUpperCase(),
+        allowedRoles: const ['companyadmin', 'admin'],
+      );
+      if (requester == null) {
+        throw 'Company Admin account not found for this company.';
+      }
+
+      await firestoreService.submitPasswordResetApprovalRequest(
+        requester: requester,
+        requesterEmail: email,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Reset request submitted. Super Admin approval is required before email is sent.',
+          ),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } catch (e) {
+      setState(() {
+        _errorMessage = e.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -278,6 +331,22 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                             }
                             return null;
                           },
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: _isLoading ? null : _handleForgotPassword,
+                            child: const Text('Forgot Password?'),
+                          ),
+                        ),
+                        Text(
+                          'No email access? Request Super Admin to reset your account access.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textSecondary,
+                          ),
+                          textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 32),
 

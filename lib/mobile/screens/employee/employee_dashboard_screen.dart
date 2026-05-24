@@ -101,6 +101,11 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
         automaticallyImplyLeading: false,
         actions: [
           IconButton(
+            icon: const Icon(Icons.lock_reset),
+            tooltip: 'Change PIN',
+            onPressed: () => _showChangePinDialog(context, ref),
+          ),
+          IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Logout',
             onPressed: () => _showLogoutDialog(context, ref),
@@ -533,5 +538,163 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
         ],
       ),
     );
+  }
+
+  static void _showChangePinDialog(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (_) => const _ChangePinDialog(),
+    );
+  }
+}
+
+class _ChangePinDialog extends ConsumerStatefulWidget {
+  const _ChangePinDialog();
+
+  @override
+  ConsumerState<_ChangePinDialog> createState() => _ChangePinDialogState();
+}
+
+class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
+  final _currentPinController = TextEditingController();
+  final _newPinController = TextEditingController();
+  final _confirmPinController = TextEditingController();
+  bool _isSubmitting = false;
+
+  @override
+  void dispose() {
+    _currentPinController.dispose();
+    _newPinController.dispose();
+    _confirmPinController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Change PIN'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _currentPinController,
+              obscureText: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Current PIN',
+                prefixIcon: Icon(Icons.lock_outline),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _newPinController,
+              obscureText: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'New PIN (4-6 digits)',
+                prefixIcon: Icon(Icons.pin),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _confirmPinController,
+              obscureText: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Confirm New PIN',
+                prefixIcon: Icon(Icons.pin_outlined),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSubmitting ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _isSubmitting ? null : _handleSubmit,
+          child: _isSubmitting
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Update'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _handleSubmit() async {
+    final currentPin = _currentPinController.text.trim();
+    final newPin = _newPinController.text.trim();
+    final confirmPin = _confirmPinController.text.trim();
+
+    if (currentPin.isEmpty || newPin.isEmpty || confirmPin.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill all fields')),
+      );
+      return;
+    }
+    if (!RegExp(r'^\d{4,6}$').hasMatch(newPin)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New PIN must be 4-6 digits')),
+      );
+      return;
+    }
+    if (newPin != confirmPin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New PIN and confirm PIN do not match')),
+      );
+      return;
+    }
+    if (currentPin == newPin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New PIN must be different from current PIN')),
+      );
+      return;
+    }
+
+    final user = ref.read(currentUserProvider).value;
+    if (user == null || user.uid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to identify current user')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+    });
+
+    try {
+      await ref.read(firestoreServiceProvider).changeEmployeePin(
+            userId: user.uid,
+            currentPin: currentPin,
+            newPin: newPin,
+          );
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('PIN updated successfully'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
+    }
   }
 }

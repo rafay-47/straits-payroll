@@ -5,6 +5,7 @@ import '../../../shared/constants/app_strings.dart';
 import '../../../shared/providers/auth_provider.dart';
 import '../../../shared/providers/project_provider.dart';
 import '../../../shared/models/user_model.dart';
+import '../../../shared/models/password_reset_request_model.dart';
 import '../projects/project_management_screen.dart';
 import '../employees/employee_approval_screen.dart';
 import '../employees/employee_management_screen.dart';
@@ -52,6 +53,11 @@ class AdminDashboardScreen extends ConsumerWidget {
             tooltip: 'Refresh',
           ),
           IconButton(
+            icon: const Icon(Icons.mark_email_read),
+            onPressed: () => _showPasswordResetApprovalsDialog(context, ref),
+            tooltip: 'Password Reset Approvals',
+          ),
+          IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () {
               Navigator.push(
@@ -62,6 +68,11 @@ class AdminDashboardScreen extends ConsumerWidget {
               );
             },
             tooltip: 'Settings',
+          ),
+          IconButton(
+            icon: const Icon(Icons.lock_reset),
+            onPressed: () => _showChangePasswordDialog(context, ref),
+            tooltip: 'Change Password',
           ),
           IconButton(
             icon: const Icon(Icons.logout),
@@ -616,6 +627,270 @@ class AdminDashboardScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _showChangePasswordDialog(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    await showDialog(
+      context: context,
+      builder: (_) => const _AdminChangePasswordDialog(),
+    );
+  }
+
+  Future<void> _showPasswordResetApprovalsDialog(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final approver = await ref.read(currentUserProvider.future);
+    if (approver == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to load current user')),
+      );
+      return;
+    }
+
+    if (!context.mounted) return;
+    await showDialog(
+      context: context,
+      builder: (_) => _AdminPasswordResetApprovalsDialog(approver: approver),
+    );
+  }
+}
+
+class _AdminChangePasswordDialog extends ConsumerStatefulWidget {
+  const _AdminChangePasswordDialog();
+
+  @override
+  ConsumerState<_AdminChangePasswordDialog> createState() =>
+      _AdminChangePasswordDialogState();
+}
+
+class _AdminChangePasswordDialogState
+    extends ConsumerState<_AdminChangePasswordDialog> {
+  final _currentPasswordController = TextEditingController();
+  final _newPasswordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  bool _isSaving = false;
+
+  @override
+  void dispose() {
+    _currentPasswordController.dispose();
+    _newPasswordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Change Password'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _currentPasswordController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Current Password',
+                prefixIcon: Icon(Icons.lock_outline),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _newPasswordController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'New Password',
+                prefixIcon: Icon(Icons.lock),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _confirmPasswordController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Confirm New Password',
+                prefixIcon: Icon(Icons.lock_reset),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _isSaving ? null : _handleSubmit,
+          child: _isSaving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Update'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _handleSubmit() async {
+    final currentPassword = _currentPasswordController.text;
+    final newPassword = _newPasswordController.text;
+    final confirmPassword = _confirmPasswordController.text;
+
+    if (currentPassword.isEmpty || newPassword.isEmpty || confirmPassword.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill all fields')),
+      );
+      return;
+    }
+    if (newPassword.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New password must be at least 6 characters')),
+      );
+      return;
+    }
+    if (newPassword != confirmPassword) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New password and confirm password do not match')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      await ref.read(authServiceProvider).updatePassword(
+            currentPassword: currentPassword,
+            newPassword: newPassword,
+          );
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Password changed successfully'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+}
+
+class _AdminPasswordResetApprovalsDialog extends ConsumerStatefulWidget {
+  final UserModel approver;
+
+  const _AdminPasswordResetApprovalsDialog({required this.approver});
+
+  @override
+  ConsumerState<_AdminPasswordResetApprovalsDialog> createState() =>
+      _AdminPasswordResetApprovalsDialogState();
+}
+
+class _AdminPasswordResetApprovalsDialogState
+    extends ConsumerState<_AdminPasswordResetApprovalsDialog> {
+  bool _isProcessing = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Password Reset Approvals'),
+      content: SizedBox(
+        width: 640,
+        child: FutureBuilder<List<PasswordResetRequestModel>>(
+          future: ref
+              .read(firestoreServiceProvider)
+              .getPendingPasswordResetRequestsForApprover(
+                approver: widget.approver,
+              ),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Text('Error: ${snapshot.error}');
+            }
+            final requests = snapshot.data ?? [];
+            if (requests.isEmpty) {
+              return const Text('No pending supervisor reset requests.');
+            }
+
+            return ListView.separated(
+              shrinkWrap: true,
+              itemCount: requests.length,
+              separatorBuilder: (_, __) => const Divider(),
+              itemBuilder: (context, index) {
+                final req = requests[index];
+                return ListTile(
+                  title: Text('${req.requesterName} (${req.requesterRole.toUpperCase()})'),
+                  subtitle: Text(req.requesterEmail),
+                  trailing: ElevatedButton(
+                    onPressed: _isProcessing ? null : () => _approve(req),
+                    child: const Text('Approve & Send'),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isProcessing ? null : () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _approve(PasswordResetRequestModel req) async {
+    setState(() {
+      _isProcessing = true;
+    });
+    try {
+      await ref.read(authServiceProvider).sendPasswordResetEmail(
+            email: req.requesterEmail,
+          );
+      await ref.read(firestoreServiceProvider).markPasswordResetRequestApproved(
+            requestId: req.requestId,
+            approverId: widget.approver.uid,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reset email sent to ${req.requesterEmail}')),
+      );
+      setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+      }
+    }
   }
 }
 

@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/services/company_service.dart';
 import '../../../shared/services/auth_service.dart';
 import '../../../shared/models/company_model.dart';
+import '../../../shared/models/user_model.dart';
+import '../../../shared/models/password_reset_request_model.dart';
 import '../../../shared/constants/app_colors.dart';
+import '../../../shared/providers/auth_provider.dart';
 import '../../../shared/widgets/company_logo_widget.dart';
 import '../companies/create_company_screen.dart';
 import '../companies/company_details_screen.dart';
@@ -15,6 +18,104 @@ class SuperAdminDashboardScreen extends ConsumerStatefulWidget {
   @override
   ConsumerState<SuperAdminDashboardScreen> createState() =>
       _SuperAdminDashboardScreenState();
+}
+
+class _PasswordResetApprovalsDialog extends ConsumerStatefulWidget {
+  final UserModel approver;
+
+  const _PasswordResetApprovalsDialog({required this.approver});
+
+  @override
+  ConsumerState<_PasswordResetApprovalsDialog> createState() =>
+      _PasswordResetApprovalsDialogState();
+}
+
+class _PasswordResetApprovalsDialogState
+    extends ConsumerState<_PasswordResetApprovalsDialog> {
+  bool _isProcessing = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Password Reset Approvals'),
+      content: SizedBox(
+        width: 640,
+        child: FutureBuilder<List<PasswordResetRequestModel>>(
+          future: ref
+              .read(firestoreServiceProvider)
+              .getPendingPasswordResetRequestsForApprover(
+                approver: widget.approver,
+              ),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Text('Error: ${snapshot.error}');
+            }
+            final requests = snapshot.data ?? [];
+            if (requests.isEmpty) {
+              return const Text('No pending password reset requests.');
+            }
+
+            return ListView.separated(
+              shrinkWrap: true,
+              itemCount: requests.length,
+              separatorBuilder: (_, __) => const Divider(),
+              itemBuilder: (context, index) {
+                final req = requests[index];
+                return ListTile(
+                  title: Text('${req.requesterName} (${req.requesterRole.toUpperCase()})'),
+                  subtitle: Text(req.requesterEmail),
+                  trailing: ElevatedButton(
+                    onPressed: _isProcessing ? null : () => _approve(req),
+                    child: const Text('Approve & Send'),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isProcessing ? null : () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _approve(PasswordResetRequestModel req) async {
+    setState(() {
+      _isProcessing = true;
+    });
+    try {
+      await ref.read(authServiceProvider).sendPasswordResetEmail(
+            email: req.requesterEmail,
+          );
+      await ref.read(firestoreServiceProvider).markPasswordResetRequestApproved(
+            requestId: req.requestId,
+            approverId: widget.approver.uid,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reset email sent to ${req.requesterEmail}')),
+      );
+      setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+      }
+    }
+  }
 }
 
 class _SuperAdminDashboardScreenState
@@ -197,6 +298,23 @@ class _SuperAdminDashboardScreenState
     }
   }
 
+  Future<void> _showPasswordResetApprovalsDialog() async {
+    final approver = await ref.read(currentUserProvider.future);
+    if (approver == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to load current user')),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (_) => _PasswordResetApprovalsDialog(approver: approver),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -219,6 +337,11 @@ class _SuperAdminDashboardScreenState
               setState(() {});
             },
             tooltip: 'Refresh',
+          ),
+          IconButton(
+            icon: const Icon(Icons.mark_email_read),
+            onPressed: _showPasswordResetApprovalsDialog,
+            tooltip: 'Password Reset Approvals',
           ),
           // SA-4: Change password
           IconButton(
