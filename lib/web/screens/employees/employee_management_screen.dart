@@ -31,6 +31,14 @@ class _EmployeeManagementScreenState
   String _searchQuery = '';
   late TabController _tabController;
 
+  String _getEmployeeIdText(UserModel user) {
+    return user.employeeId ??
+        user.employeeIdNumber ??
+        user.systemGeneratedId ??
+        user.customId ??
+        'N/A';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -254,6 +262,8 @@ class _EmployeeManagementScreenState
           filteredUsers = filteredUsers.where((user) {
             return user.name.toLowerCase().contains(_searchQuery) ||
                 user.email.toLowerCase().contains(_searchQuery) ||
+                (user.employeeId?.toLowerCase().contains(_searchQuery) ?? false) ||
+                (user.employeeIdNumber?.toLowerCase().contains(_searchQuery) ?? false) ||
                 (user.systemGeneratedId?.toLowerCase().contains(_searchQuery) ?? false) ||
                 (user.customId?.toLowerCase().contains(_searchQuery) ?? false);
           }).toList();
@@ -296,6 +306,7 @@ class _EmployeeManagementScreenState
                   DataColumn(label: Text('Name')),
                   DataColumn(label: Text('Email')),
                   DataColumn(label: Text('Role')),
+                  DataColumn(label: Text('Employee ID')),
                   DataColumn(label: Text('System ID')),
                   DataColumn(label: Text('Custom ID')),
                   DataColumn(label: Text('Status')),
@@ -349,6 +360,7 @@ class _EmployeeManagementScreenState
                           ),
                         ),
                       ),
+                      DataCell(Text(_getEmployeeIdText(user))),
                       DataCell(Text(user.systemGeneratedId ?? 'N/A')),
                       DataCell(Text(user.customId ?? 'N/A')),
                       DataCell(
@@ -560,6 +572,7 @@ class _EmployeeManagementScreenState
                 _buildDetailRow('Email', user.email),
                 _buildDetailRow('Phone', user.phoneNumber ?? 'N/A'),
                 _buildDetailRow('Role', user.role.toUpperCase()),
+                _buildDetailRow('Employee ID', _getEmployeeIdText(user)),
                 _buildDetailRow('System ID', user.systemGeneratedId ?? 'N/A'),
                 _buildDetailRow('Custom ID', user.customId ?? 'N/A'),
                 _buildDetailRow('Status', user.status.toUpperCase()),

@@ -143,6 +143,14 @@ class _EmployeeCard extends StatelessWidget {
     }
   }
 
+  String _getEmployeeIdText() {
+    return employee.employeeId ??
+        employee.employeeIdNumber ??
+        employee.systemGeneratedId ??
+        employee.customId ??
+        'N/A';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -186,7 +194,7 @@ class _EmployeeCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'ID: ${employee.displayId ?? "N/A"}',
+                          'Employee ID: ${_getEmployeeIdText()}',
                           style: TextStyle(
                             fontSize: 12,
                             color: AppColors.textSecondary,
@@ -315,7 +323,7 @@ class _EmployeeCard extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          'ID: ${employee.displayId ?? "N/A"}',
+                          'Employee ID: ${_getEmployeeIdText()}',
                           style: TextStyle(
                             fontSize: 14,
                             color: AppColors.textSecondary,
@@ -341,6 +349,7 @@ class _EmployeeCard extends StatelessWidget {
               const SizedBox(height: 16),
 
               _buildDetailSection('Employment Details', [
+                _buildDetailRow('Employee ID', _getEmployeeIdText()),
                 _buildDetailRow('Status', _getStatusText()),
                 _buildDetailRow('Role', 'Employee'),
                 if (employee.systemGeneratedId != null)

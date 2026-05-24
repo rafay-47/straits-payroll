@@ -336,6 +336,7 @@ class _EmployeeLoginScreenState extends ConsumerState<EmployeeLoginScreen> {
                     obscureText: true,
                     keyboardType: TextInputType.number,
                     controller: _pinController,
+                    autoDisposeControllers: false,
                     pinTheme: PinTheme(
                       shape: PinCodeFieldShape.box,
                       borderRadius: BorderRadius.circular(8),
