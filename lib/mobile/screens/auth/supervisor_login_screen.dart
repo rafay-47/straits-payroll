@@ -183,26 +183,12 @@ class _SupervisorLoginScreenState
         identifier: identifier,
       );
 
-      final requester = await firestoreService.getUserByEmail(
-        email: email,
-        companyId: _validatedCompany!.id,
-        allowedRoles: const ['supervisor'],
-      );
-      if (requester == null) {
-        throw 'Supervisor account not found for this company.';
-      }
-
-      await firestoreService.submitPasswordResetApprovalRequest(
-        requester: requester,
-        requesterEmail: email,
-      );
+      await ref.read(authServiceProvider).sendPasswordResetEmail(email: email);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Reset request submitted. Company Admin approval is required before email is sent.',
-          ),
+        SnackBar(
+          content: Text('Password reset link sent to $email'),
           backgroundColor: AppColors.success,
         ),
       );
@@ -447,14 +433,6 @@ class _SupervisorLoginScreenState
                         onPressed: _isLoading ? null : _handleForgotPassword,
                         child: Text(AppStrings.forgotPassword),
                       ),
-                    ),
-                    Text(
-                      'No email access? Request company admin to reset your access.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textSecondary,
-                      ),
-                      textAlign: TextAlign.center,
                     ),
 
                     const SizedBox(height: 20),

@@ -5,7 +5,6 @@ import '../../../shared/constants/app_strings.dart';
 import '../../../shared/providers/auth_provider.dart';
 import '../../../shared/providers/project_provider.dart';
 import '../../../shared/models/user_model.dart';
-import '../../../shared/models/password_reset_request_model.dart';
 import '../projects/project_management_screen.dart';
 import '../employees/employee_approval_screen.dart';
 import '../employees/employee_management_screen.dart';
@@ -51,11 +50,6 @@ class AdminDashboardScreen extends ConsumerWidget {
               ref.invalidate(allPendingEmployeesProvider);
             },
             tooltip: 'Refresh',
-          ),
-          IconButton(
-            icon: const Icon(Icons.mark_email_read),
-            onPressed: () => _showPasswordResetApprovalsDialog(context, ref),
-            tooltip: 'Password Reset Approvals',
           ),
           IconButton(
             icon: const Icon(Icons.settings),
@@ -639,25 +633,6 @@ class AdminDashboardScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _showPasswordResetApprovalsDialog(
-    BuildContext context,
-    WidgetRef ref,
-  ) async {
-    final approver = await ref.read(currentUserProvider.future);
-    if (approver == null) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to load current user')),
-      );
-      return;
-    }
-
-    if (!context.mounted) return;
-    await showDialog(
-      context: context,
-      builder: (_) => _AdminPasswordResetApprovalsDialog(approver: approver),
-    );
-  }
 }
 
 class _AdminChangePasswordDialog extends ConsumerStatefulWidget {
@@ -796,101 +771,4 @@ class _AdminChangePasswordDialogState
   }
 }
 
-class _AdminPasswordResetApprovalsDialog extends ConsumerStatefulWidget {
-  final UserModel approver;
-
-  const _AdminPasswordResetApprovalsDialog({required this.approver});
-
-  @override
-  ConsumerState<_AdminPasswordResetApprovalsDialog> createState() =>
-      _AdminPasswordResetApprovalsDialogState();
-}
-
-class _AdminPasswordResetApprovalsDialogState
-    extends ConsumerState<_AdminPasswordResetApprovalsDialog> {
-  bool _isProcessing = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Password Reset Approvals'),
-      content: SizedBox(
-        width: 640,
-        child: FutureBuilder<List<PasswordResetRequestModel>>(
-          future: ref
-              .read(firestoreServiceProvider)
-              .getPendingPasswordResetRequestsForApprover(
-                approver: widget.approver,
-              ),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return Text('Error: ${snapshot.error}');
-            }
-            final requests = snapshot.data ?? [];
-            if (requests.isEmpty) {
-              return const Text('No pending supervisor reset requests.');
-            }
-
-            return ListView.separated(
-              shrinkWrap: true,
-              itemCount: requests.length,
-              separatorBuilder: (_, __) => const Divider(),
-              itemBuilder: (context, index) {
-                final req = requests[index];
-                return ListTile(
-                  title: Text('${req.requesterName} (${req.requesterRole.toUpperCase()})'),
-                  subtitle: Text(req.requesterEmail),
-                  trailing: ElevatedButton(
-                    onPressed: _isProcessing ? null : () => _approve(req),
-                    child: const Text('Approve & Send'),
-                  ),
-                );
-              },
-            );
-          },
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _isProcessing ? null : () => Navigator.pop(context),
-          child: const Text('Close'),
-        ),
-      ],
-    );
-  }
-
-  Future<void> _approve(PasswordResetRequestModel req) async {
-    setState(() {
-      _isProcessing = true;
-    });
-    try {
-      await ref.read(authServiceProvider).sendPasswordResetEmail(
-            email: req.requesterEmail,
-          );
-      await ref.read(firestoreServiceProvider).markPasswordResetRequestApproved(
-            requestId: req.requestId,
-            approverId: widget.approver.uid,
-          );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Reset email sent to ${req.requesterEmail}')),
-      );
-      setState(() {});
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isProcessing = false;
-        });
-      }
-    }
-  }
-}
 

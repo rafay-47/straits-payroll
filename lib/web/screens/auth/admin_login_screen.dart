@@ -4,7 +4,6 @@ import '../../../shared/constants/app_colors.dart';
 import '../../../shared/services/auth_service.dart';
 import '../../../shared/services/company_service.dart';
 import '../../../shared/models/company_model.dart';
-import '../../../shared/providers/auth_provider.dart';
 import '../../../shared/widgets/company_logo_widget.dart';
 import '../dashboard/admin_dashboard_screen.dart';
 
@@ -107,27 +106,12 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
     });
 
     try {
-      final firestoreService = ref.read(firestoreServiceProvider);
-      final requester = await firestoreService.getUserByEmail(
-        email: email,
-        companyId: _companyCodeController.text.trim().toUpperCase(),
-        allowedRoles: const ['companyadmin', 'admin'],
-      );
-      if (requester == null) {
-        throw 'Company Admin account not found for this company.';
-      }
-
-      await firestoreService.submitPasswordResetApprovalRequest(
-        requester: requester,
-        requesterEmail: email,
-      );
+      await _authService.sendPasswordResetEmail(email: email);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Reset request submitted. Super Admin approval is required before email is sent.',
-          ),
+        SnackBar(
+          content: Text('Password reset link sent to $email'),
           backgroundColor: AppColors.success,
         ),
       );
@@ -339,14 +323,6 @@ class _AdminLoginScreenState extends ConsumerState<AdminLoginScreen> {
                             onPressed: _isLoading ? null : _handleForgotPassword,
                             child: const Text('Forgot Password?'),
                           ),
-                        ),
-                        Text(
-                          'No email access? Request Super Admin to reset your account access.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textSecondary,
-                          ),
-                          textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 32),
 

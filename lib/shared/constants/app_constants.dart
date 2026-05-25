@@ -10,7 +10,6 @@ class AppConstants {
   static const String employersCollection = 'employers';
   static const String auditLogsCollection = 'auditLogs';
   static const String systemSettingsCollection = 'systemSettings';
-  static const String passwordResetRequestsCollection = 'passwordResetRequests';
 
   // Subcollections
   static const String attendanceSubcollection = 'attendance';
