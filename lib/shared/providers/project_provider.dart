@@ -21,9 +21,15 @@ final allProjectsProvider = FutureProvider<List<ProjectModel>>((ref) async {
 
 /// All active projects provider
 final activeProjectsProvider = FutureProvider<List<ProjectModel>>((ref) async {
+  final currentUser = ref.watch(currentUserProvider).value;
   final firestoreService = ref.watch(firestoreServiceProvider);
   
   try {
+    if (currentUser != null && currentUser.isSupervisor) {
+      final assignedProjects = await ref.watch(supervisorProjectsProvider.future);
+      return assignedProjects.where((project) => project.isActive).toList();
+    }
+
     return await firestoreService.getActiveProjects();
   } catch (e) {
     print('Error fetching active projects: $e');

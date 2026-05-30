@@ -86,6 +86,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
   @override
   Widget build(BuildContext context) {
     final projectsAsync = ref.watch(activeProjectsProvider);
+    final currentUser = ref.watch(currentUserProvider).value;
 
     return AlertDialog(
       title: Text(_isEditMode ? 'Edit User' : 'Add Employee/Supervisor'),
@@ -407,10 +408,14 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
                       ),
                       const SizedBox(height: 8),
                       if (_selectedRole == 'supervisor' || _selectedRole == 'admin')
-                        const Text(
-                          '• Firebase Auth account created (email/password)\n'
-                          '• Can login immediately to web/mobile app\n'
-                          '• Status: Approved automatically',
+                        Text(
+                          currentUser != null && currentUser.isSupervisor
+                              ? '• Firebase Auth account created (email/password)\n'
+                                '• Can login with credentials once approved by company admin\n'
+                                '• Status: Pending (requires admin approval)'
+                              : '• Firebase Auth account created (email/password)\n'
+                                '• Can login immediately to web/mobile app\n'
+                                '• Status: Approved automatically',
                         )
                       else
                         const Text(
@@ -693,10 +698,10 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
           : null,
       assignedProjectIds: _selectedProjectIds,
       supervisorId: _selectedRole == 'employee' ? _selectedSupervisorId : null, // SA-9
-      status: (_selectedRole == 'supervisor' ||
-                  _selectedRole == 'admin' ||
-                  _selectedRole == 'companyadmin')
-          ? 'approved'
+            status: (_selectedRole == 'supervisor' ||
+            _selectedRole == 'admin' ||
+            _selectedRole == 'companyadmin')
+          ? (currentUser != null && currentUser.isSupervisor ? 'pending' : 'approved')
           : 'pending',
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),

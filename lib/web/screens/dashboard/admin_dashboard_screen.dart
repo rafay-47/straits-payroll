@@ -32,6 +32,7 @@ class AdminDashboardScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProvider);
+    final currentUser = user.asData?.value;
     final projects = ref.watch(activeProjectsProvider);
     final allEmployees = ref.watch(allEmployeesProvider);
     final pendingEmployees = ref.watch(allPendingEmployeesProvider);
@@ -176,7 +177,13 @@ class AdminDashboardScreen extends ConsumerWidget {
                       context,
                       title: 'Pending Approvals',
                       value: pendingEmployees.when(
-                        data: (list) => list.length.toString(),
+                        data: (list) {
+                          if (currentUser != null && currentUser.isSupervisor) {
+                            final filtered = list.where((u) => u.role.toLowerCase() != 'supervisor').toList();
+                            return filtered.length.toString();
+                          }
+                          return list.length.toString();
+                        },
                         loading: () => '...',
                         error: (_, __) => '0',
                       ),
@@ -348,7 +355,12 @@ class AdminDashboardScreen extends ConsumerWidget {
                             const SizedBox(height: 16),
                             pendingEmployees.when(
                               data: (users) {
-                                if (users.isEmpty) {
+                                // If the current viewer is a supervisor, do not show supervisor approvals
+                                final displayedUsers = (currentUser != null && currentUser.isSupervisor)
+                                    ? users.where((u) => u.role.toLowerCase() != 'supervisor').toList()
+                                    : users;
+
+                                if (displayedUsers.isEmpty) {
                                   return Padding(
                                     padding: const EdgeInsets.all(24),
                                     child: Center(
@@ -361,15 +373,14 @@ class AdminDashboardScreen extends ConsumerWidget {
                                     ),
                                   );
                                 }
-
                                 return ListView.separated(
                                   shrinkWrap: true,
                                   physics: const NeverScrollableScrollPhysics(),
-                                  itemCount: users.length > 5 ? 5 : users.length,
+                                  itemCount: displayedUsers.length > 5 ? 5 : displayedUsers.length,
                                   separatorBuilder: (_, __) => const Divider(),
                                   itemBuilder: (context, index) {
-                                    final user = users[index];
-                                    final isSupervisor = user.role.toLowerCase() == 'supervisor';
+                                    final u = displayedUsers[index];
+                                    final isSupervisor = u.role.toLowerCase() == 'supervisor';
                                     return ListTile(
                                       leading: CircleAvatar(
                                         backgroundColor: (isSupervisor
@@ -385,8 +396,8 @@ class AdminDashboardScreen extends ConsumerWidget {
                                               : AppColors.employeeColor,
                                         ),
                                       ),
-                                      title: Text('${user.name} (${user.role.toUpperCase()})'),
-                                      subtitle: Text('ID: ${user.displayId ?? "N/A"}'),
+                                      title: Text('${u.name} (${u.role.toUpperCase()})'),
+                                      subtitle: Text('ID: ${u.displayId ?? "N/A"}'),
                                       trailing: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
@@ -396,7 +407,7 @@ class AdminDashboardScreen extends ConsumerWidget {
                                               // Open approval dialog directly
                                               showDialog(
                                                 context: context,
-                                                builder: (dialogContext) => ApproveEmployeeDialog(employee: user),
+                                                builder: (dialogContext) => ApproveEmployeeDialog(employee: u),
                                               );
                                             },
                                             tooltip: 'Approve',
@@ -406,7 +417,7 @@ class AdminDashboardScreen extends ConsumerWidget {
                                             onPressed: () {
                                               ScaffoldMessenger.of(context).showSnackBar(
                                                 SnackBar(
-                                                  content: Text('Reject ${user.name}'),
+                                                  content: Text('Reject ${u.name}'),
                                                 ),
                                               );
                                             },
