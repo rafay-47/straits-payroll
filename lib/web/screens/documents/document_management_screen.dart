@@ -1,4 +1,5 @@
-import 'dart:html' as html;
+import 'widgets/document_download_stub.dart'
+    if (dart.library.html) 'widgets/document_download_web.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -399,20 +400,7 @@ class _DocumentManagementScreenState
         const SnackBar(content: Text('Preparing secure download...')),
       );
 
-      final anchor = html.AnchorElement(href: document.url)
-        ..target = '_blank'
-        ..rel = 'noopener noreferrer'
-        ..style.display = 'none';
-
-      html.document.body?.append(anchor);
-      anchor.click();
-      anchor.remove();
-
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Download started')),
-        );
-      }
+      triggerBrowserDownload(document.url, filename: document.name);
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -30,6 +31,31 @@ Future<void> _bootstrapApp() async {
           : null,
     );
     print('✅ Firebase initialized successfully');
+
+    // Configure Firestore settings for real-time sync
+    // In cloud_firestore 6.x, persistence is enabled by default.
+    // We just ensure settings are configured before any other Firestore operations.
+    try {
+      final firestore = FirebaseFirestore.instance;
+      if (kIsWeb) {
+        // Configure web persistence with multi-tab synchronization
+        firestore.settings = const Settings(
+          persistenceEnabled: true,
+          cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+        );
+        print('✅ Firestore web persistence configured (multi-tab)');
+      } else {
+        // Mobile: persistence is on by default
+        firestore.settings = const Settings(
+          persistenceEnabled: true,
+          cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+        );
+        print('✅ Firestore mobile persistence configured');
+      }
+    } catch (e) {
+      // Settings can only be set before any other usage of Firestore
+      print('⚠️ Firestore settings already configured: $e');
+    }
 
     print('🎨 Starting Flutter app...');
     runApp(

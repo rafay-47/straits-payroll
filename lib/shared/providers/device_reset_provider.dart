@@ -2,15 +2,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../models/device_reset_request_model.dart';
 import '../models/device_info_model.dart'; // This is DeviceInfo
+import '../models/user_model.dart';
 import '../services/firestore_service.dart';
 import '../services/device_service.dart';
 import '../constants/app_constants.dart';
 import 'auth_provider.dart';
-
-/// Provider for FirestoreService instance
-final firestoreServiceProvider = Provider<FirestoreService>((ref) {
-  return FirestoreService();
-});
 
 /// Provider for DeviceService instance
 final deviceServiceProvider = Provider<DeviceService>((ref) {
@@ -26,46 +22,58 @@ final uuidProvider = Provider<Uuid>((ref) {
 // DEVICE RESET REQUEST PROVIDERS
 // ============================================
 
-/// Provider for user's device reset requests
-final userDeviceResetRequestsProvider = StreamProvider.autoDispose.family<List<DeviceResetRequestModel>, String>((ref, userId) async* {
+/// Provider for user's device reset requests (real-time stream)
+final userDeviceResetRequestsProvider = StreamProvider.autoDispose.family<List<DeviceResetRequestModel>, String>((ref, userId) {
   final firestoreService = ref.watch(firestoreServiceProvider);
   
   try {
-    final requests = await firestoreService.getUserDeviceResetRequests(userId);
-    yield requests;
+    return firestoreService.streamUserDeviceResetRequests(userId);
   } catch (e) {
     throw 'Failed to fetch device reset requests: $e';
   }
 });
 
 /// Provider for all device reset requests (admin/supervisor)
-final allDeviceResetRequestsProvider = StreamProvider.autoDispose<List<DeviceResetRequestModel>>((ref) async* {
+/// Real-time stream of device reset requests for the current company
+final allDeviceResetRequestsProvider = StreamProvider.autoDispose<List<DeviceResetRequestModel>>((ref) {
   final firestoreService = ref.watch(firestoreServiceProvider);
-  
-  try {
-    final requests = await firestoreService.getAllDeviceResetRequests();
-    yield requests;
-  } catch (e) {
-    throw 'Failed to fetch all device reset requests: $e';
+  final currentUser = ref.watch(currentUserProvider).value;
+
+  if (currentUser == null) {
+    return Stream.value([]);
   }
+
+  // Stream pending requests for the current company
+  if (currentUser.companyId != null) {
+    return firestoreService.streamPendingDeviceResetRequestsForCompany(
+      currentUser.companyId!,
+    );
+  }
+  return Stream.value([]);
 });
 
 /// Provider for pending device reset requests
-final pendingDeviceResetRequestsProvider = StreamProvider.autoDispose<List<DeviceResetRequestModel>>((ref) async* {
+final pendingDeviceResetRequestsProvider = StreamProvider.autoDispose<List<DeviceResetRequestModel>>((ref) {
   final firestoreService = ref.watch(firestoreServiceProvider);
-  
-  try {
-    final requests = await firestoreService.getPendingDeviceResetRequests();
-    yield requests;
-  } catch (e) {
-    throw 'Failed to fetch pending device reset requests: $e';
+  final currentUser = ref.watch(currentUserProvider).value;
+
+  if (currentUser == null) {
+    return Stream.value([]);
   }
+
+  // Stream pending requests for the current company
+  if (currentUser.companyId != null) {
+    return firestoreService.streamPendingDeviceResetRequestsForCompany(
+      currentUser.companyId!,
+    );
+  }
+  return Stream.value([]);
 });
 
 /// Provider to check if user can request device reset
 final canRequestDeviceResetProvider = FutureProvider.autoDispose.family<bool, String>((ref, userId) async {
   final firestoreService = ref.watch(firestoreServiceProvider);
-  
+
   try {
     return await firestoreService.canRequestDeviceReset(
       userId,
@@ -74,6 +82,20 @@ final canRequestDeviceResetProvider = FutureProvider.autoDispose.family<bool, St
   } catch (e) {
     throw 'Failed to check device reset eligibility: $e';
   }
+});
+
+/// Real-time stream of employees in the current admin's company that
+/// currently have a device bound. Drives the "Active Devices" tab on
+/// the device reset management screen and powers proactive resets.
+final boundDevicesForCompanyProvider =
+    StreamProvider.autoDispose<List<UserModel>>((ref) {
+  final firestoreService = ref.watch(firestoreServiceProvider);
+  final currentUser = ref.watch(currentUserProvider).value;
+
+  if (currentUser == null || currentUser.companyId == null) {
+    return Stream.value([]);
+  }
+  return firestoreService.streamBoundDevicesForCompany(currentUser.companyId!);
 });
 
 // ============================================
@@ -192,6 +214,37 @@ class DeviceResetController extends StateNotifier<AsyncValue<void>> {
       ref.invalidate(userDeviceResetRequestsProvider(userId));
       ref.invalidate(pendingDeviceResetRequestsProvider);
       ref.invalidate(allDeviceResetRequestsProvider);
+
+      state = const AsyncValue.data(null);
+    } catch (e, stack) {
+      state = AsyncValue.error(e, stack);
+      rethrow;
+    }
+  }
+
+  /// Admin-initiated device reset (proactive, no pending request).
+  /// Clears the employee's device binding so they can register a new
+  /// device on their next login.
+  Future<void> adminResetEmployeeDevice({
+    required String userId,
+    required String adminId,
+  }) async {
+    state = const AsyncValue.loading();
+
+    try {
+      final firestoreService = ref.read(firestoreServiceProvider);
+
+      await firestoreService.adminResetEmployeeDevice(
+        userId: userId,
+        adminId: adminId,
+      );
+
+      // Invalidate providers to refresh UI across the app.
+      ref.invalidate(userDeviceResetRequestsProvider(userId));
+      ref.invalidate(pendingDeviceResetRequestsProvider);
+      ref.invalidate(allDeviceResetRequestsProvider);
+      ref.invalidate(currentUserProvider);
+      ref.invalidate(boundDevicesForCompanyProvider);
 
       state = const AsyncValue.data(null);
     } catch (e, stack) {

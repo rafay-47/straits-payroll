@@ -51,14 +51,21 @@ final currentUserIdProvider = Provider<String?>((ref) {
 // ============================================
 
 /// Current user profile provider
-/// For supervisors/admins: Uses Firebase Auth state
+/// For supervisors/admins: Uses Firebase Auth state with real-time Firestore listener
 /// For employees: Uses auth controller state (no Firebase Auth)
 final currentUserProvider = StreamProvider<UserModel?>((ref) async* {
   // First check if auth controller has a user (for employees without Firebase Auth)
   final authControllerState = ref.watch(authControllerProvider);
   if (authControllerState.user != null) {
     print('✅ Using user from auth controller state (employee login)');
-    yield authControllerState.user;
+    // Still subscribe to real-time updates for employee data changes
+    final firestoreService = ref.watch(firestoreServiceProvider);
+    final userId = authControllerState.user!.uid;
+    if (userId.isNotEmpty) {
+      yield* firestoreService.streamUser(userId);
+    } else {
+      yield authControllerState.user;
+    }
     return;
   }
 
@@ -73,24 +80,24 @@ final currentUserProvider = StreamProvider<UserModel?>((ref) async* {
 
   final firestoreService = ref.watch(firestoreServiceProvider);
 
+  // Use real-time stream instead of one-time get
   try {
-    final user = await firestoreService.getUser(userId);
-    print('');
-    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    print('👤 CURRENT USER LOADED (Supervisor/Admin)');
-    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    if (user != null) {
-      print('  - UID: ${user.uid}');
-      print('  - Name: ${user.name}');
-      print('  - Role: ${user.role}');
-      print('  - CompanyId: ${user.companyId ?? "NULL"}');  // ⚠️ CRITICAL
-      print('  - Email: ${user.email}');
-    } else {
-      print('  ❌ USER NOT FOUND IN FIRESTORE');
+    await for (final user in firestoreService.streamUser(userId)) {
+      print('');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('👤 CURRENT USER UPDATED (Real-time)');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      if (user != null) {
+        print('  - UID: ${user.uid}');
+        print('  - Name: ${user.name}');
+        print('  - Role: ${user.role}');
+        print('  - CompanyId: ${user.companyId ?? "NULL"}');
+        print('  - Email: ${user.email}');
+      }
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('');
+      yield user;
     }
-    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    print('');
-    yield user;
   } catch (e) {
     print('❌ Error fetching user: $e');
     yield null;
@@ -345,39 +352,81 @@ final authControllerProvider =
 
 // ============================================
 // ADMIN PROVIDERS (For Web Dashboard)
+// Real-time streams for immediate UI updates
 // ============================================
 
-/// Provider for all supervisors
-final allSupervisorsProvider = FutureProvider<List<UserModel>>((ref) async {
+/// Provider for all supervisors (real-time)
+final allSupervisorsProvider = StreamProvider<List<UserModel>>((ref) async* {
   final firestoreService = ref.watch(firestoreServiceProvider);
+  final currentUser = ref.watch(currentUserProvider).value;
   try {
-    return await firestoreService.getUsersByRole('supervisor');
+    if (currentUser == null) {
+      yield [];
+      return;
+    }
+    // Super admin sees all supervisors; others see only their company's supervisors
+    if (currentUser.role == 'superadmin') {
+      yield* firestoreService.streamUsersByRole('supervisor');
+    } else if (currentUser.companyId != null) {
+      yield* firestoreService.streamUsersByRoleForCompany(
+        role: 'supervisor',
+        companyId: currentUser.companyId!,
+      );
+    } else {
+      yield [];
+    }
   } catch (e) {
-    print('Error fetching supervisors: $e');
-    return [];
+    print('Error fetching supervisors stream: $e');
+    yield [];
   }
 });
 
-/// Provider for all pending employees (not yet approved)
+/// Provider for all pending employees (real-time, not yet approved)
 final allPendingEmployeesProvider =
-    FutureProvider<List<UserModel>>((ref) async {
+    StreamProvider<List<UserModel>>((ref) async* {
   final firestoreService = ref.watch(firestoreServiceProvider);
+  final currentUser = ref.watch(currentUserProvider).value;
   try {
-    return await firestoreService.getPendingEmployees();
+    if (currentUser == null) {
+      yield [];
+      return;
+    }
+    if (currentUser.role == 'superadmin') {
+      yield* firestoreService.streamAllPendingEmployees();
+    } else if (currentUser.companyId != null) {
+      yield* firestoreService.streamPendingEmployeesForCompany(
+        currentUser.companyId!,
+      );
+    } else {
+      yield [];
+    }
   } catch (e) {
-    print('Error fetching pending employees: $e');
-    return [];
+    print('Error fetching pending employees stream: $e');
+    yield [];
   }
 });
 
-/// Provider for all approved employees
+/// Provider for all approved employees (real-time)
 final allApprovedEmployeesProvider =
-    FutureProvider<List<UserModel>>((ref) async {
+    StreamProvider<List<UserModel>>((ref) async* {
   final firestoreService = ref.watch(firestoreServiceProvider);
+  final currentUser = ref.watch(currentUserProvider).value;
   try {
-    return await firestoreService.getApprovedEmployees();
+    if (currentUser == null) {
+      yield [];
+      return;
+    }
+    if (currentUser.role == 'superadmin') {
+      yield* firestoreService.streamAllApprovedEmployees();
+    } else if (currentUser.companyId != null) {
+      yield* firestoreService.streamApprovedEmployeesForCompany(
+        currentUser.companyId!,
+      );
+    } else {
+      yield [];
+    }
   } catch (e) {
-    print('Error fetching approved employees: $e');
-    return [];
+    print('Error fetching approved employees stream: $e');
+    yield [];
   }
 });

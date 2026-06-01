@@ -5,18 +5,21 @@ import '../../../shared/constants/app_strings.dart';
 import '../../../shared/models/user_model.dart';
 import '../../../shared/providers/auth_provider.dart';
 
-/// Provider for employees under current supervisor
-final supervisorEmployeesProvider = FutureProvider<List<UserModel>>((ref) async {
+/// Provider for employees under current supervisor (real-time)
+final supervisorEmployeesProvider = StreamProvider<List<UserModel>>((ref) async* {
   final currentUser = ref.watch(currentUserProvider).value;
-  if (currentUser == null) return [];
+  if (currentUser == null) {
+    yield [];
+    return;
+  }
 
   final firestoreService = ref.watch(firestoreServiceProvider);
   
   try {
-    return await firestoreService.getEmployeesBySupervisor(currentUser.uid);
+    yield* firestoreService.streamEmployeesBySupervisor(currentUser.uid);
   } catch (e) {
-    print('Error fetching employees: $e');
-    return [];
+    print('Error fetching employees stream: $e');
+    yield [];
   }
 });
 

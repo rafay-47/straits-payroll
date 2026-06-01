@@ -4,61 +4,107 @@ import '../models/project_model.dart';
 import 'auth_provider.dart';
 
 // ============================================
-// PROJECT PROVIDERS
+// PROJECT PROVIDERS (Real-time streams)
 // ============================================
 
-/// All projects provider (includes active and inactive)
-final allProjectsProvider = FutureProvider<List<ProjectModel>>((ref) async {
+/// All projects provider with real-time updates
+final allProjectsProvider = StreamProvider<List<ProjectModel>>((ref) async* {
   final firestoreService = ref.watch(firestoreServiceProvider);
+  final currentUser = ref.watch(currentUserProvider).value;
   
   try {
-    return await firestoreService.getAllProjects();
+    if (currentUser == null) {
+      yield [];
+      return;
+    }
+    if (currentUser.role == 'superadmin') {
+      yield* firestoreService.streamAllProjects();
+    } else if (currentUser.companyId != null) {
+      yield* firestoreService.streamProjectsForCompany(currentUser.companyId!);
+    } else {
+      yield [];
+    }
   } catch (e) {
-    print('Error fetching all projects: $e');
-    return [];
+    print('Error fetching all projects stream: $e');
+    yield [];
   }
 });
 
-/// All active projects provider
-final activeProjectsProvider = FutureProvider<List<ProjectModel>>((ref) async {
+/// All active projects provider with real-time updates
+final activeProjectsProvider = StreamProvider<List<ProjectModel>>((ref) async* {
   final currentUser = ref.watch(currentUserProvider).value;
   final firestoreService = ref.watch(firestoreServiceProvider);
   
   try {
-    if (currentUser != null && currentUser.isSupervisor) {
+    if (currentUser == null) {
+      yield [];
+      return;
+    }
+    if (currentUser.isSupervisor) {
+      // Supervisors see only their assigned projects (filtered to active)
       final assignedProjects = await ref.watch(supervisorProjectsProvider.future);
-      return assignedProjects.where((project) => project.isActive).toList();
+      yield assignedProjects.where((project) => project.isActive).toList();
+      return;
     }
 
-    return await firestoreService.getActiveProjects();
+    // For admins: stream all company projects, filter to active
+    Stream<List<ProjectModel>> sourceStream;
+    if (currentUser.role == 'superadmin') {
+      sourceStream = firestoreService.streamAllProjects();
+    } else if (currentUser.companyId != null) {
+      sourceStream = firestoreService.streamProjectsForCompany(currentUser.companyId!);
+    } else {
+      yield [];
+      return;
+    }
+    await for (final projects in sourceStream) {
+      yield projects.where((p) => p.isActive).toList();
+    }
   } catch (e) {
-    print('Error fetching active projects: $e');
-    return [];
+    print('Error fetching active projects stream: $e');
+    yield [];
   }
 });
 
-/// Employee's assigned projects provider
-final employeeProjectsProvider = FutureProvider<List<ProjectModel>>((ref) async {
-  // Use AsyncValue (not .future): .future completes once and can stay null after employee login.
+/// Employee's assigned projects provider with real-time updates
+final employeeProjectsProvider = StreamProvider<List<ProjectModel>>((ref) async* {
   final userAsync = ref.watch(currentUserProvider);
   final user = userAsync.asData?.value;
-  if (user == null) return [];
+  if (user == null) {
+    yield [];
+    return;
+  }
 
   final firestoreService = ref.watch(firestoreServiceProvider);
   
   try {
-    return await firestoreService.getEmployeeProjects(user.uid);
+    // For employees: stream all company projects and filter to assigned
+    if (user.companyId == null) {
+      yield [];
+      return;
+    }
+    await for (final allProjects
+        in firestoreService.streamProjectsForCompany(user.companyId!)) {
+      final assignedProjects = allProjects.where((p) {
+        if (p.assignedEmployeeIds.contains(user.uid)) return true;
+        return false;
+      }).toList();
+      yield assignedProjects;
+    }
   } catch (e) {
-    print('Error fetching employee projects: $e');
-    return [];
+    print('Error fetching employee projects stream: $e');
+    yield [];
   }
 });
 
-/// Supervisor's assigned projects provider
-final supervisorProjectsProvider = FutureProvider<List<ProjectModel>>((ref) async {
+/// Supervisor's assigned projects provider with real-time updates
+final supervisorProjectsProvider = StreamProvider<List<ProjectModel>>((ref) async* {
   final userAsync = ref.watch(currentUserProvider);
   final user = userAsync.asData?.value;
-  if (user == null) return [];
+  if (user == null) {
+    yield [];
+    return;
+  }
 
   final firestoreService = ref.watch(firestoreServiceProvider);
   
@@ -66,37 +112,71 @@ final supervisorProjectsProvider = FutureProvider<List<ProjectModel>>((ref) asyn
     final assignedIds = user.assignedProjectIds.isNotEmpty
         ? user.assignedProjectIds
         : (user.assignedProjectId != null ? [user.assignedProjectId!] : <String>[]);
-    if (assignedIds.isEmpty) return [];
-
-    final projects = <ProjectModel>[];
-    for (final projectId in assignedIds) {
-      final project = await firestoreService.getProject(projectId);
-      if (project != null) {
-        projects.add(project);
-      }
+    if (assignedIds.isEmpty) {
+      yield [];
+      return;
     }
-    return projects;
+
+    if (user.companyId == null) {
+      yield [];
+      return;
+    }
+
+    // Subscribe to all company projects, filter to assigned
+    await for (final allProjects
+        in firestoreService.streamProjectsForCompany(user.companyId!)) {
+      final projects = allProjects
+          .where((p) => assignedIds.contains(p.projectId))
+          .toList();
+      yield projects;
+    }
   } catch (e) {
-    print('Error fetching supervisor projects: $e');
-    return [];
+    print('Error fetching supervisor projects stream: $e');
+    yield [];
   }
 });
 
 /// Backward compatible single supervisor project (first assignment)
-final supervisorProjectProvider = FutureProvider<ProjectModel?>((ref) async {
-  final projects = await ref.watch(supervisorProjectsProvider.future);
+final supervisorProjectProvider = Provider<ProjectModel?>((ref) {
+  final projects = ref.watch(supervisorProjectsProvider).asData?.value ?? [];
   return projects.isEmpty ? null : projects.first;
 });
 
-/// Single project provider
-final projectProvider = FutureProvider.family<ProjectModel?, String>((ref, projectId) async {
+/// Single project provider with real-time updates
+final projectProvider = StreamProvider.family<ProjectModel?, String>((ref, projectId) async* {
   final firestoreService = ref.watch(firestoreServiceProvider);
-  
+  final currentUser = ref.watch(currentUserProvider).value;
+
+  if (currentUser == null) {
+    yield null;
+    return;
+  }
+
   try {
-    return await firestoreService.getProject(projectId);
+    Stream<List<ProjectModel>> sourceStream;
+    if (currentUser.role == 'superadmin') {
+      sourceStream = firestoreService.streamAllProjects();
+    } else if (currentUser.companyId != null) {
+      sourceStream =
+          firestoreService.streamProjectsForCompany(currentUser.companyId!);
+    } else {
+      yield null;
+      return;
+    }
+
+    await for (final projects in sourceStream) {
+      ProjectModel? project;
+      for (final p in projects) {
+        if (p.projectId == projectId) {
+          project = p;
+          break;
+        }
+      }
+      yield project;
+    }
   } catch (e) {
-    print('Error fetching project: $e');
-    return null;
+    print('Error fetching project stream: $e');
+    yield null;
   }
 });
 
