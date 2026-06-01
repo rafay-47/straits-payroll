@@ -268,45 +268,64 @@ class NFCService {
 
   /// Extract the unique tag UID from an NFC tag.
   ///
-  /// NTAG 213/215/216 are NFC Forum Type 2 tags (ISO 14443-3A / NFC-A).
-  /// Debit/credit cards are Type 4 tags (ISO 14443-4A, ISO-DEP layer).
-  /// Both expose a stable CSN/UID on the underlying NFC-A (or NFC-B) layer.
-  /// - Android: UID is in `tag.data['nfca']['identifier']` (4-7 bytes) and
-  ///   mirrored in `tag.data['isodep']['identifier']` for Type 4 cards.
-  ///   Some older Mastercard/14443-4B cards use `tag.data['nfcb']['identifier']`.
-  ///   MIFARE Ultralight (NTAG 213/215) also populates
-  ///   `tag.data['mifareultralight']['identifier']`.
-  /// - iOS: UID is in `tag.data['miFareTag']['identifier']` (camelCase)
-  ///   or `tag.data['mifare']['identifier']` (older plugin versions)
-  ///   or `tag.data['iso7816']['identifier']`.
+  /// Supports the tag types the client is likely to deploy, plus common
+  /// payment cards. All keys use the platform-native names from
+  /// `nfc_manager` 3.5.1 (Android: lowercase, e.g. `nfca`; iOS: mixed case,
+  /// e.g. `miFareTag`).
   ///
-  /// The UID is 7 bytes for NTAG 213/215/216 (e.g., "04:A3:12:5B:6C:7D:8E")
-  /// and 4-10 bytes for contactless payment cards.
+  /// **Android key map** (per `Translator.kt` in nfc_manager):
+  /// - `nfca` — NFC-A (NTAG 213/215/216, MIFARE Ultralight/Classic/Desfire,
+  ///   and the underlying transport for Visa payWave, Mastercard PayPass, etc.)
+  /// - `isodep` — ISO 14443-4 / ISO-DEP layer (Type 4 cards: debit/credit,
+  ///   MIFARE DESFire, NDEF-formatted smart cards)
+  /// - `nfcb` — NFC-B (some ISO 14443-4B payment cards, transit cards)
+  /// - `nfcf` — FeliCa (Japanese transit / e-money)
+  /// - `nfcv` — ISO 15693 vicinity (library tags, laundry tags)
+  /// - `mifareultralight` — MIFARE Ultralight (some NTAGs also report here)
+  /// - `mifareclassic` — MIFARE Classic 1K/4K
+  /// - `ndefformatable` — NDEF-formattable tags
+  /// - `ndef` — NDEF-formatted tags (UID lives in `identifier`)
+  ///
+  /// **iOS key map** (per `Translator.swift` in nfc_manager):
+  /// - `miFareTag` — MIFARE (NTAG, Ultralight, Classic, DESFire)
+  /// - `mifare` — older plugin versions
+  /// - `iso7816` — contactless payment cards on iOS
+  /// - `felica` — FeliCa on iOS
+  /// - `iso15693` — ISO 15693 on iOS
+  ///
+  /// The UID is 4-7 bytes for NTAG 213/215/216, 4-10 bytes for contactless
+  /// payment cards, 4 bytes for MIFARE Classic, and 8 bytes for FeliCa.
   String? _extractTagId(NfcTag tag) {
     try {
       final data = tag.data;
 
-      // Dump raw data to log on first attempt so we can debug if extraction
-      // fails. The nfc_manager plugin's platform channel returns the inner
-      // maps as `Map<dynamic, dynamic>` (untyped) — so we MUST NOT cast
-      // them to `Map<String, dynamic>` or the cast throws and we return null.
-      // We use a defensive `_bytesFromMap` helper instead.
+      // Dump raw data to log so we can debug if extraction fails. The
+      // nfc_manager plugin's platform channel returns the inner maps as
+      // `Map<dynamic, dynamic>` (untyped) — so we MUST NOT cast them to
+      // `Map<String, dynamic>` or the cast throws and we return null. We
+      // use a defensive `_bytesFromMap` helper instead.
       print('[NFC] raw data keys=${data.keys.toList()} '
           'nfcaType=${data['nfca']?.runtimeType} '
           'isodepType=${data['isodep']?.runtimeType}');
 
-      // Order matters: prefer the raw NFC-A identifier, then ISO-DEP,
-      // then the rest. Both nfca and isodep carry the same CSN/UID for
-      // Type 4 cards but Android sometimes exposes one without the other.
+      // Ordered probe of every known tech. The first one with a non-empty
+      // `identifier` wins. Order is mostly arbitrary; nfca and isodep come
+      // first because they cover the vast majority of tags.
       for (final key in const [
         'nfca',
         'isodep',
         'nfcb',
+        'nfcf',
+        'nfcv',
         'mifareultralight',
         'mifareclassic',
+        'ndefformatable',
+        'ndef',
         'miFareTag',
         'mifare',
         'iso7816',
+        'felica',
+        'iso15693',
       ]) {
         final bytes = _bytesFromMap(data[key], 'identifier');
         if (bytes != null && bytes.isNotEmpty) {

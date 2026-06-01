@@ -461,6 +461,12 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       return;
     }
 
+    // Cache controller and trigger before any await.
+    final attendanceController =
+        ref.read(attendanceControllerProvider.notifier);
+    final refreshTrigger =
+        ref.read(attendanceRefreshTriggerProvider.notifier);
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -483,20 +489,30 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
 
       // Get device info
       final deviceInfo = await _deviceService.getDeviceInfo();
+      if (!mounted) return;
 
       // Perform check-in
       final user = ref.read(currentUserProvider).value;
       if (user == null) throw 'User not logged in';
 
-      final success = await ref.read(attendanceControllerProvider.notifier).checkIn(
-            userId: user.uid,
-            projectId: _selectedProject!.projectId,
-            checkInMethod: AppConstants.checkInMethodGPS,
-            deviceInfo: deviceInfo,
-          );
+      // Use cached controller.
+      final success = await attendanceController.checkIn(
+        userId: user.uid,
+        projectId: _selectedProject!.projectId,
+        checkInMethod: AppConstants.checkInMethodGPS,
+        deviceInfo: deviceInfo,
+      );
 
-      if (success && mounted) {
+      if (!mounted) return;
+
+      if (success) {
+        // Refresh providers while still mounted.
+        ref.invalidate(todayActiveAttendanceProvider);
+        refreshTrigger.state++;
+        if (!mounted) return;
+
         await Future.delayed(const Duration(milliseconds: 800));
+        if (!mounted) return;
         _showSuccessDialog('GPS Check-in Successful', 
             'Checked in at ${locationData['address']}');
       }
@@ -545,6 +561,15 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       });
       return;
     }
+
+    // Cache the controller BEFORE any await that could outlive this widget.
+    // If the user navigates away while NFC is being read, the widget gets
+    // disposed and `ref` becomes invalid. The controller itself is bound to
+    // the provider scope, not the widget, so a cached reference is safe.
+    final attendanceController =
+        ref.read(attendanceControllerProvider.notifier);
+    final refreshTrigger =
+        ref.read(attendanceRefreshTriggerProvider.notifier);
 
     setState(() {
       _isLoading = true;
@@ -619,17 +644,25 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       final user = ref.read(currentUserProvider).value;
       if (user == null) throw 'User not logged in';
 
-      final success = await ref.read(attendanceControllerProvider.notifier).checkIn(
-            userId: user.uid,
-            projectId: _selectedProject!.projectId,
-            checkInMethod: AppConstants.checkInMethodMulti,
-            deviceInfo: deviceInfo,
-            notes: 'All-method check-in verified. Methods: ${methods.join(", ")}${validatedQrCode != null ? ". QR: $validatedQrCode" : ""}',
-          );
+      // Use the controller cached before the await chain — by now the widget
+      // may already be disposed, so `ref.read` would throw.
+      final success = await attendanceController.checkIn(
+        userId: user.uid,
+        projectId: _selectedProject!.projectId,
+        checkInMethod: AppConstants.checkInMethodMulti,
+        deviceInfo: deviceInfo,
+        notes: 'All-method check-in verified. Methods: ${methods.join(", ")}${validatedQrCode != null ? ". QR: $validatedQrCode" : ""}',
+      );
       if (!mounted) return;
 
-      if (success && mounted) {
+      if (success) {
+        // Refresh downstream providers NOW while the widget is still mounted.
+        ref.invalidate(todayActiveAttendanceProvider);
+        refreshTrigger.state++;
+        if (!mounted) return;
+
         await Future.delayed(const Duration(milliseconds: 1000));
+        if (!mounted) return;
         _showSuccessDialog(
           'All-Methods Check-in Successful',
           'Checked in after completing all enabled verification methods',
@@ -658,6 +691,15 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       });
       return;
     }
+
+    // Cache the controller BEFORE any await that could outlive this widget.
+    final attendanceController =
+        ref.read(attendanceControllerProvider.notifier);
+    // Also cache the refresh trigger notifier so we can increment it safely
+    // after a successful check-in (this avoids calling `ref.read` in the
+    // success path, where the widget may already be disposed).
+    final refreshTrigger =
+        ref.read(attendanceRefreshTriggerProvider.notifier);
 
     setState(() {
       _isLoading = true;
@@ -700,16 +742,28 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       final user = ref.read(currentUserProvider).value;
       if (user == null) throw 'User not logged in';
 
-      final success = await ref.read(attendanceControllerProvider.notifier).checkIn(
-            userId: user.uid,
-            projectId: _selectedProject!.projectId,
-            checkInMethod: AppConstants.checkInMethodNFC,
-            deviceInfo: deviceInfo,
-            notes: 'NFC Tag: $tagId',
-          );
+      // Use the cached controller — by now the widget may already be
+      // disposed, so `ref.read` would throw.
+      final success = await attendanceController.checkIn(
+        userId: user.uid,
+        projectId: _selectedProject!.projectId,
+        checkInMethod: AppConstants.checkInMethodNFC,
+        deviceInfo: deviceInfo,
+        notes: 'NFC Tag: $tagId',
+      );
 
-      if (success && mounted) {
+      if (!mounted) return;
+
+      if (success) {
+        // Refresh downstream providers NOW while the widget is still mounted.
+        // We can't do this in `_showSuccessDialog`'s OK button because by
+        // the time the user taps OK, the widget may already be disposed.
+        ref.invalidate(todayActiveAttendanceProvider);
+        refreshTrigger.state++;
+        if (!mounted) return;
+
         await Future.delayed(const Duration(milliseconds: 800));
+        if (!mounted) return;
         _showSuccessDialog('NFC Check-in Successful',
             'Checked in using NFC tag ($tagId)');
       }
@@ -744,6 +798,12 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       return;
     }
 
+    // Cache controller and trigger before any await.
+    final attendanceController =
+        ref.read(attendanceControllerProvider.notifier);
+    final refreshTrigger =
+        ref.read(attendanceRefreshTriggerProvider.notifier);
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -764,9 +824,11 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
 
       if (qrCode == null) {
         // User cancelled scanning
-        setState(() {
-          _isLoading = false;
-        });
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
         return;
       }
 
@@ -781,28 +843,36 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       final user = ref.read(currentUserProvider).value;
       if (user == null) throw 'User not logged in';
 
-      final success = await ref.read(attendanceControllerProvider.notifier).checkIn(
-            userId: user.uid,
-            projectId: _selectedProject!.projectId,
-            checkInMethod: AppConstants.checkInMethodQR,
-            deviceInfo: deviceInfo,
-            notes: 'QR Code: $qrCode',
-          );
+      // Use cached controller.
+      final success = await attendanceController.checkIn(
+        userId: user.uid,
+        projectId: _selectedProject!.projectId,
+        checkInMethod: AppConstants.checkInMethodQR,
+        deviceInfo: deviceInfo,
+        notes: 'QR Code: $qrCode',
+      );
 
-      if (success && mounted) {
+      if (!mounted) return;
+
+      if (success) {
         print('');
         print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         print('✅ QR CHECK-IN SUCCESSFUL');
         print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         print('Waiting for Firestore write to complete...');
         
-        // Wait longer for Firestore write to complete and propagate
+        // Refresh providers while still mounted.
+        ref.invalidate(todayActiveAttendanceProvider);
+        refreshTrigger.state++;
+        if (!mounted) return;
+        
+        // Wait for Firestore write to complete and propagate.
         await Future.delayed(const Duration(milliseconds: 1200));
+        if (!mounted) return;
         
         print('✅ Firestore write should be complete');
         print('Showing success dialog...');
         
-        // Show success dialog (it will handle provider refresh and navigation)
         _showSuccessDialog('QR Check-in Successful',
             'Checked in using QR code');
       }
@@ -861,6 +931,12 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       return;
     }
 
+    // Cache controller and trigger before any await.
+    final attendanceController =
+        ref.read(attendanceControllerProvider.notifier);
+    final refreshTrigger =
+        ref.read(attendanceRefreshTriggerProvider.notifier);
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -875,19 +951,27 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       final user = ref.read(currentUserProvider).value;
       if (user == null) throw 'User not logged in';
 
-      final success = await ref.read(attendanceControllerProvider.notifier).checkIn(
-            userId: user.uid,
-            projectId: _selectedProject!.projectId,
-            checkInMethod: AppConstants.checkInMethodManual,
-            deviceInfo: deviceInfo,
-            notes: 'Manual check-in - requires supervisor approval',
-          );
+      // Use cached controller.
+      final success = await attendanceController.checkIn(
+        userId: user.uid,
+        projectId: _selectedProject!.projectId,
+        checkInMethod: AppConstants.checkInMethodManual,
+        deviceInfo: deviceInfo,
+        notes: 'Manual check-in - requires supervisor approval',
+      );
 
-      if (success && mounted) {
+      if (!mounted) return;
+
+      if (success) {
+        // Refresh providers while still mounted.
+        ref.invalidate(todayActiveAttendanceProvider);
+        refreshTrigger.state++;
+        if (!mounted) return;
+
         // Wait for Firestore write to complete
         await Future.delayed(const Duration(milliseconds: 800));
+        if (!mounted) return;
         
-        // Show success dialog (it will handle provider refresh)
         _showSuccessDialog('Manual Check-in Requested',
             'Your check-in request has been submitted. Waiting for supervisor approval.');
       }
@@ -992,6 +1076,14 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       _errorMessage = null;
     });
 
+    // Cache the controller BEFORE the NFC/QR awaits. The widget may be
+    // disposed while the user is holding the card, and `ref` becomes
+    // invalid. The controller reference itself is safe to use.
+    final attendanceController =
+        ref.read(attendanceControllerProvider.notifier);
+    final refreshTrigger =
+        ref.read(attendanceRefreshTriggerProvider.notifier);
+
     try {
       // Validate based on selected method
       String? validationNote;
@@ -1001,6 +1093,7 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
           message: 'Hold your phone near the NFC tag to check out',
         );
 
+        if (!mounted) return;
         if (tagId == null || tagId.isEmpty) {
           throw 'Could not read NFC tag. Please try again.';
         }
@@ -1026,11 +1119,15 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
         );
 
         if (qrCode == null) {
-          setState(() {
-            _isLoading = false;
-          });
+          if (mounted) {
+            setState(() {
+              _isLoading = false;
+            });
+          }
           return; // User cancelled
         }
+
+        if (!mounted) return;
 
         // STRICT VALIDATION: QR code MUST match one of project's active QR codes
         if (nonNullProject.supportsQR) {
@@ -1059,28 +1156,38 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
         validationNote = 'QR Code: $qrCode';
       }
 
+      if (!mounted) return;
+
       // Perform check-out with method
       print('🔄 Calling attendanceController.checkOut()...');
       print('   Attendance ID to update: $correctAttendanceId');
       
-      final success = await ref.read(attendanceControllerProvider.notifier).checkOut(
-            userId: user.uid,
-            attendanceId: correctAttendanceId, // Use the correct ID
-            checkOutMethod: checkOutMethod,
-            notes: validationNote,
-          );
+      // Use the controller cached before the await chain.
+      final success = await attendanceController.checkOut(
+        userId: user.uid,
+        attendanceId: correctAttendanceId, // Use the correct ID
+        checkOutMethod: checkOutMethod,
+        notes: validationNote,
+      );
 
-      if (success && mounted) {
+      if (!mounted) return;
+
+      if (success) {
         print('✅ Check-out successful!');
         print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
+        // Refresh downstream providers NOW while the widget is still mounted.
+        // We can't do this in `_showSuccessDialog`'s OK button because by
+        // the time the user taps OK, the widget may already be disposed.
+        ref.invalidate(todayActiveAttendanceProvider);
+        refreshTrigger.state++;
+        if (!mounted) return;
+        
         await Future.delayed(const Duration(milliseconds: 800));
+        if (!mounted) return;
         
         _showSuccessDialog('Check-out Successful',
             'Your working hours have been recorded');
-        
-        ref.invalidate(todayActiveAttendanceProvider);
-        ref.read(attendanceRefreshTriggerProvider.notifier).state++;
         print('   Trigger incremented for dashboard refresh');
       } else {
         print('❌ Check-out failed: success=$success, mounted=$mounted');
@@ -1167,8 +1274,13 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
   }
 
   void _showSuccessDialog(String title, String message) {
+    // Capture the navigator BEFORE any await. `Navigator.of(context)` is
+    // safe to call here because the widget is still mounted at the time
+    // this method is invoked. The captured `widgetNavigator` can be used
+    // safely from the OK button's onPressed even if the widget is later
+    // disposed (Navigator is bound to the NavigatorState, not the widget).
     final widgetNavigator = Navigator.of(context);
-    
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -1189,21 +1301,19 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
         actions: [
           TextButton(
             onPressed: () async {
+              // IMPORTANT: do NOT call `ref.*` here. By the time the user
+              // taps OK, the parent widget may already be disposed (e.g.
+              // they navigated back while the dialog was open), and any
+              // `ref.invalidate` or `ref.read` call would throw
+              // "Cannot use ref after the widget was disposed".
+              // All provider invalidation MUST be done by the caller BEFORE
+              // it calls _showSuccessDialog.
               Navigator.of(dialogContext).pop();
               await Future.delayed(const Duration(milliseconds: 200));
-              
-              ref.invalidate(todayActiveAttendanceProvider);
-              ref.read(attendanceRefreshTriggerProvider.notifier).state++;
-              await Future.delayed(const Duration(milliseconds: 800));
-              
+
               if (mounted) {
-                widgetNavigator.pop();
-                await Future.delayed(const Duration(milliseconds: 500));
+                widgetNavigator.pop(); // Pop the check-in screen back to dashboard
               }
-              
-              ref.invalidate(todayActiveAttendanceProvider);
-              ref.invalidate(currentUserProvider);
-              ref.read(attendanceRefreshTriggerProvider.notifier).state++;
             },
             child: const Text('OK'),
           ),
