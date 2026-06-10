@@ -105,18 +105,17 @@ final todayCheckInCountProvider = FutureProvider.family<int, String>(
     final userAsync = ref.watch(currentUserProvider);
     final user = userAsync.asData?.value;
     if (user == null) {
-      yield 0;
-      return;
+      return 0;
     }
 
     final firestoreService = ref.watch(firestoreServiceProvider);
     
     try {
+      int count = 0;
       await for (final attendanceList
           in firestoreService.streamAttendanceByUser(user.uid)) {
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day);
-        int count = 0;
         for (final att in attendanceList) {
           final attDate = DateTime(
             att.checkInTime.year,
@@ -127,10 +126,10 @@ final todayCheckInCountProvider = FutureProvider.family<int, String>(
             count++;
           }
         }
-        yield count;
       }
+      return count;
     } catch (e) {
-      yield 0;
+      return 0;
     }
   },
 );

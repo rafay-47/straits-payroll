@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:html' as html;
+import 'html_stub.dart' if (dart.library.html) 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:straights_psyroll/shared/models/document_model.dart';

@@ -102,8 +102,7 @@ final supervisorProjectsProvider = FutureProvider<List<ProjectModel>>((ref) asyn
   final userAsync = ref.watch(currentUserProvider);
   final user = userAsync.asData?.value;
   if (user == null) {
-    yield [];
-    return;
+    return [];
   }
 
   final firestoreService = ref.watch(firestoreServiceProvider);
@@ -112,7 +111,7 @@ final supervisorProjectsProvider = FutureProvider<List<ProjectModel>>((ref) asyn
     return await firestoreService.getSupervisorProjects(user.uid);
   } catch (e) {
     print('Error fetching supervisor projects stream: $e');
-    yield [];
+    return [];
   }
 });
 
