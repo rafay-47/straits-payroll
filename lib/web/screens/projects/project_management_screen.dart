@@ -33,6 +33,7 @@ class _ProjectManagementScreenState
   Widget build(BuildContext context) {
     final projectsAsync = ref.watch(allProjectsProvider);
     final currentUserAsync = ref.watch(currentUserProvider);
+    final isSupervisor = currentUserAsync.asData?.value?.isSupervisor ?? false;
 
     return Scaffold(
       appBar: AppBar(
@@ -65,19 +66,20 @@ class _ProjectManagementScreenState
                   ),
                 ),
                 const SizedBox(width: 16),
-                ElevatedButton.icon(
-                  onPressed: () => _showAddProjectDialog(context),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add Project'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 16,
+                if (!isSupervisor)
+                  ElevatedButton.icon(
+                    onPressed: () => _showAddProjectDialog(context),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add Project'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
             const SizedBox(height: 24),
@@ -258,7 +260,7 @@ class _ProjectManagementScreenState
                                     children: [
                                       IconButton(
                                         icon: const Icon(Icons.edit),
-                                        onPressed: _canManageProject(project) ? () =>
+                                        onPressed: _canEditProject(project) ? () =>
                                             _showEditProjectDialog(
                                           context,
                                           project,
@@ -267,7 +269,7 @@ class _ProjectManagementScreenState
                                       ),
                                       IconButton(
                                         icon: const Icon(Icons.people),
-                                        onPressed: _canManageProject(project) ? () =>
+                                        onPressed: _canAssignEmployees(project) ? () =>
                                             _showAssignEmployeesDialog(
                                           context,
                                           project,
@@ -283,7 +285,7 @@ class _ProjectManagementScreenState
                                               ? Colors.green
                                               : Colors.grey,
                                         ),
-                                        onPressed: _canManageProject(project) ? () =>
+                                        onPressed: _canEditProject(project) ? () =>
                                             _toggleProjectStatus(project)
                                             : null,
                                         tooltip: 'Toggle Status',
@@ -333,10 +335,10 @@ class _ProjectManagementScreenState
   }
 
   Future<void> _toggleProjectStatus(ProjectModel project) async {
-    if (!_canManageProject(project)) {
+    if (!_canEditProject(project)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('You can only manage your own projects.')),
+          const SnackBar(content: Text('You do not have permission to change this project.')),
         );
       }
       return;
@@ -381,11 +383,25 @@ class _ProjectManagementScreenState
     return projects.where((p) => p.supervisorId == currentUser.uid).toList();
   }
 
-  bool _canManageProject(ProjectModel project) {
+  /// Edit / toggle project status: admins only. Supervisors cannot
+  /// create, edit, or change the status of a project; they can only
+  /// assign employees to projects they own.
+  bool _canEditProject(ProjectModel project) {
     final currentUser = ref.read(currentUserProvider).value;
     if (currentUser == null) return false;
-    if (currentUser.role.toLowerCase() != 'supervisor') return true;
-    return project.supervisorId == currentUser.uid;
+    if (currentUser.isSupervisor) return false;
+    return true;
+  }
+
+  /// Assign employees: admins can assign to any project in the
+  /// company; supervisors can only assign to projects they own.
+  bool _canAssignEmployees(ProjectModel project) {
+    final currentUser = ref.read(currentUserProvider).value;
+    if (currentUser == null) return false;
+    if (currentUser.isSupervisor) {
+      return project.supervisorId == currentUser.uid;
+    }
+    return true;
   }
 
   Future<String> _getEmployeeNames(ProjectModel project) async {

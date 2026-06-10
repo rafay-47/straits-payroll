@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:nfc_manager/nfc_manager.dart';
 
@@ -38,14 +39,36 @@ class NFCService {
 
     try {
       await NfcManager.instance.startSession(
+        // Poll for ISO 14443 (NFC-A) tags - required for NTAG 213/215/216
+        // and Mifare Ultralight. Without this, the session may detect
+        // the tag but fail to read its UID on some devices.
+        pollingOptions: {NfcPollingOption.iso14443},
         onDiscovered: (NfcTag tag) async {
           try {
+            developer.log(
+              'NFC tag discovered. techs=${tag.data.keys.toList()}',
+              name: 'NFCService',
+            );
             final tagId = _extractTagId(tag);
+            developer.log(
+              'NFC tag UID/CSN extracted: $tagId',
+              name: 'NFCService',
+            );
             await NfcManager.instance.stopSession();
             if (!completer.isCompleted) completer.complete(tagId);
-          } catch (e) {
-            await NfcManager.instance.stopSession(errorMessage: 'Error reading tag');
-            if (!completer.isCompleted) completer.completeError('Failed to read NFC tag: $e');
+          } catch (e, st) {
+            developer.log(
+              'Failed to read NFC tag',
+              name: 'NFCService',
+              error: e,
+              stackTrace: st,
+            );
+            try {
+              await NfcManager.instance.stopSession(errorMessage: 'Error reading tag');
+            } catch (_) {}
+            if (!completer.isCompleted) {
+              completer.completeError('Failed to read NFC tag: $e');
+            }
           }
         },
         onError: (error) async {
@@ -75,36 +98,61 @@ class NFCService {
   }) async {
     if (kIsWeb) throw 'NFC is not supported on web';
 
+    // Plain prints so they always show in `flutter run` (developer.log can be
+    // filtered). If you do not see this line when you tap, the method is not
+    // being reached from the UI.
+    print('[NFC] >>> readNFCTagWithMessage called. message="$message"');
+
     final isAvailable = await isNFCAvailable();
+    print('[NFC] isAvailable=$isAvailable');
     if (!isAvailable) throw 'NFC is not available on this device. Please enable NFC in Settings.';
 
     final completer = Completer<String?>();
 
     try {
+      print('[NFC] starting session with pollingOptions={iso14443}');
       await NfcManager.instance.startSession(
         alertMessage: message,
+        // Poll for ISO 14443 (NFC-A) tags - required for NTAG 213/215/216
+        // and Mifare Ultralight. Without this, the session may detect
+        // the tag but fail to read its UID on some devices.
+        pollingOptions: {NfcPollingOption.iso14443},
         onDiscovered: (NfcTag tag) async {
+          print('[NFC] <<< onDiscovered fired. techs=${tag.data.keys.toList()}');
           try {
             final tagId = _extractTagId(tag);
-            print('NFC Tag discovered - UID: $tagId');
-            await NfcManager.instance.stopSession(alertMessage: 'Tag read successfully!');
+            print('[NFC] extracted UID/CSN: $tagId');
+            try {
+              await NfcManager.instance.stopSession(alertMessage: 'Tag read successfully!');
+            } catch (e) {
+              print('[NFC] stopSession after read threw (ignored): $e');
+            }
             if (!completer.isCompleted) completer.complete(tagId);
-          } catch (e) {
-            await NfcManager.instance.stopSession(errorMessage: 'Error reading tag');
-            if (!completer.isCompleted) completer.completeError('Failed to read NFC tag: $e');
+          } catch (e, st) {
+            print('[NFC] onDiscovered handler threw: $e\n$st');
+            try {
+              await NfcManager.instance.stopSession(errorMessage: 'Error reading tag');
+            } catch (_) {}
+            if (!completer.isCompleted) {
+              completer.completeError('Failed to read NFC tag: $e');
+            }
           }
         },
         onError: (error) async {
+          print('[NFC] !!! onError fired: $error');
           if (!completer.isCompleted) completer.completeError('NFC error: $error');
           return;
         },
       );
+      print('[NFC] startSession returned, awaiting completer...');
 
       return await completer.future.timeout(timeout, onTimeout: () {
+        print('[NFC] --- timeout after ${timeout.inSeconds}s, no tag discovered');
         NfcManager.instance.stopSession(errorMessage: 'Timeout');
         throw 'NFC reading timed out. Please hold your phone closer to the tag.';
       });
     } catch (e) {
+      print('[NFC] outer catch: $e');
       if (!completer.isCompleted) {
         try { await NfcManager.instance.stopSession(); } catch (_) {}
       }
@@ -130,9 +178,11 @@ class NFCService {
 
     try {
       await NfcManager.instance.startSession(
+        // Poll for ISO 14443 (NFC-A) tags - required for NTAG 213/215/216.
+        pollingOptions: {NfcPollingOption.iso14443},
         onDiscovered: (NfcTag tag) async {
           final ndef = Ndef.from(tag);
-          
+
           if (ndef == null) {
             await NfcManager.instance.stopSession(errorMessage: 'Tag is not NDEF formatted. Please use an NTAG 213 or NTAG 215 tag.');
             if (!completer.isCompleted) completer.complete(false);
@@ -165,7 +215,10 @@ class NFCService {
             
             // Also read the UID for logging/storage
             final uid = _extractTagId(tag);
-            print('NFC tag written successfully. Tag UID: $uid');
+            developer.log(
+              'NFC tag written successfully. Tag UID: $uid',
+              name: 'NFCService',
+            );
             
             await NfcManager.instance.stopSession(alertMessage: 'Tag written successfully!');
             if (!completer.isCompleted) completer.complete(true);
@@ -214,12 +267,34 @@ class NFCService {
   }
 
   /// Extract the unique tag UID from an NFC tag.
-  /// 
-  /// NTAG 213/215/216 are NFC Forum Type 2 tags (ISO 14443-3A / NFC-A).
-  /// - Android: UID is in tag.data['nfca']['identifier'] or tag.data['mifareultralight']['identifier']
-  /// - iOS: UID is in tag.data['mifare']['identifier'] or tag.data['iso7816']['identifier']
-  /// 
-  /// The UID is 7 bytes for NTAG 213/215/216 (e.g., "04:A3:12:5B:6C:7D:8E")
+  ///
+  /// Supports the tag types the client is likely to deploy, plus common
+  /// payment cards. All keys use the platform-native names from
+  /// `nfc_manager` 3.5.1 (Android: lowercase, e.g. `nfca`; iOS: mixed case,
+  /// e.g. `miFareTag`).
+  ///
+  /// **Android key map** (per `Translator.kt` in nfc_manager):
+  /// - `nfca` — NFC-A (NTAG 213/215/216, MIFARE Ultralight/Classic/Desfire,
+  ///   and the underlying transport for Visa payWave, Mastercard PayPass, etc.)
+  /// - `isodep` — ISO 14443-4 / ISO-DEP layer (Type 4 cards: debit/credit,
+  ///   MIFARE DESFire, NDEF-formatted smart cards)
+  /// - `nfcb` — NFC-B (some ISO 14443-4B payment cards, transit cards)
+  /// - `nfcf` — FeliCa (Japanese transit / e-money)
+  /// - `nfcv` — ISO 15693 vicinity (library tags, laundry tags)
+  /// - `mifareultralight` — MIFARE Ultralight (some NTAGs also report here)
+  /// - `mifareclassic` — MIFARE Classic 1K/4K
+  /// - `ndefformatable` — NDEF-formattable tags
+  /// - `ndef` — NDEF-formatted tags (UID lives in `identifier`)
+  ///
+  /// **iOS key map** (per `Translator.swift` in nfc_manager):
+  /// - `miFareTag` — MIFARE (NTAG, Ultralight, Classic, DESFire)
+  /// - `mifare` — older plugin versions
+  /// - `iso7816` — contactless payment cards on iOS
+  /// - `felica` — FeliCa on iOS
+  /// - `iso15693` — ISO 15693 on iOS
+  ///
+  /// The UID is 4-7 bytes for NTAG 213/215/216, 4-10 bytes for contactless
+  /// payment cards, 4 bytes for MIFARE Classic, and 8 bytes for FeliCa.
   String? _extractTagId(NfcTag tag) {
     try {
       final data = tag.data;
@@ -260,7 +335,7 @@ class NFCService {
         }
       }
 
-      // Fallback: try NDEF additional data (works on some devices)
+      // Fallback: try NDEF additional data (works on some devices).
       final ndef = Ndef.from(tag);
       if (ndef != null) {
         final additionalData = _toMapStringDynamic(ndef.additionalData);
@@ -289,13 +364,15 @@ class NFCService {
         }
       }
 
-      // Last resort: use tag handle as string identifier
+      // Last resort: use tag handle as string identifier.
       final handle = tag.handle;
       if (handle.isNotEmpty) return handle;
 
+      print('[NFC] !!! could not extract UID. keys=${data.keys.toList()} '
+          'nfca=${data['nfca']} isodep=${data['isodep']}');
       return null;
-    } catch (e) {
-      print('Error extracting NFC tag UID: $e');
+    } catch (e, st) {
+      print('[NFC] !!! error extracting UID: $e\n$st');
       return null;
     }
   }

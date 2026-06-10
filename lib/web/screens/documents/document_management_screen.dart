@@ -7,7 +7,6 @@ import 'package:straights_psyroll/shared/models/user_model.dart';
 import 'package:straights_psyroll/shared/providers/auth_provider.dart';
 import 'package:straights_psyroll/shared/providers/document_provider.dart';
 import 'package:straights_psyroll/shared/constants/app_colors.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 /// Web Admin Screen for Document Management
 class DocumentManagementScreen extends ConsumerStatefulWidget {
@@ -290,12 +289,6 @@ class _DocumentManagementScreenState
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       IconButton(
-                                        icon: const Icon(Icons.visibility),
-                                        onPressed: () =>
-                                            _viewDocument(context, document),
-                                        tooltip: 'View',
-                                      ),
-                                      IconButton(
                                         icon: const Icon(Icons.download),
                                         onPressed: () =>
                                             _downloadDocument(context, document),
@@ -397,38 +390,6 @@ class _DocumentManagementScreenState
 
   String _formatDate(DateTime date) {
     return '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-  }
-
-  Future<void> _viewDocument(BuildContext context, DocumentModel document) async {
-    try {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Opening document...')),
-      );
-
-      final uri = Uri.parse(document.url);
-      if (await canLaunchUrl(uri)) {
-        final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-        if (!launched) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Failed to open document')),
-            );
-          }
-        }
-      } else {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cannot open this document')),
-          );
-        }
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    }
   }
 
   Future<void> _downloadDocument(

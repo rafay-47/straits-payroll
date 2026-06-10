@@ -21,29 +21,47 @@ final locationServiceProvider = Provider<LocationService>((ref) {
 /// Refresh trigger for attendance - increment to force refresh
 final attendanceRefreshTriggerProvider = StateProvider<int>((ref) => 0);
 
-/// Today's active attendance provider with manual refresh capability
-final todayActiveAttendanceProvider = FutureProvider<AttendanceModel?>((ref) async {
-  // Watch the trigger to auto-refresh when it changes
+/// Today's active attendance provider with real-time updates
+final todayActiveAttendanceProvider = StreamProvider<AttendanceModel?>((ref) async* {
+  // Watch the trigger to auto-refresh when it changes (manual refresh still works)
   final trigger = ref.watch(attendanceRefreshTriggerProvider);
-  print('🔄 todayActiveAttendanceProvider rebuilding (trigger: $trigger)');
+  print('🔄 todayActiveAttendanceProvider active (trigger: $trigger)');
   
   final userAsync = ref.watch(currentUserProvider);
   final user = userAsync.asData?.value;
   if (user == null) {
     print('❌ No user found in todayActiveAttendanceProvider');
-    return null;
+    yield null;
+    return;
   }
 
   final firestoreService = ref.watch(firestoreServiceProvider);
   
   try {
-    print('📞 Calling getTodayActiveAttendance for user: ${user.uid}');
-    final result = await firestoreService.getTodayActiveAttendance(user.uid);
-    print('✅ getTodayActiveAttendance returned: ${result != null ? "Attendance found" : "No attendance"}');
-    return result;
+    print('📡 Subscribing to real-time attendance for user: ${user.uid}');
+    // Subscribe to real-time stream of all attendance, filter to today/active
+    await for (final attendanceList
+        in firestoreService.streamAttendanceByUser(user.uid)) {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      AttendanceModel? activeAttendance;
+      for (final att in attendanceList) {
+        final attDate = DateTime(
+          att.checkInTime.year,
+          att.checkInTime.month,
+          att.checkInTime.day,
+        );
+        if (attDate == today && att.status == 'checked_in') {
+          activeAttendance = att;
+          break;
+        }
+      }
+      print('🔄 Real-time active attendance: ${activeAttendance != null ? "Found" : "None"}');
+      yield activeAttendance;
+    }
   } catch (e) {
-    print('❌ Error fetching today attendance: $e');
-    return null;
+    print('❌ Error fetching today attendance stream: $e');
+    yield null;
   }
 });
 
@@ -86,17 +104,33 @@ final todayCheckInCountProvider = FutureProvider.family<int, String>(
   (ref, projectId) async {
     final userAsync = ref.watch(currentUserProvider);
     final user = userAsync.asData?.value;
-    if (user == null) return 0;
+    if (user == null) {
+      yield 0;
+      return;
+    }
 
     final firestoreService = ref.watch(firestoreServiceProvider);
     
     try {
-      return await firestoreService.getTodayCheckInCount(
-        userId: user.uid,
-        projectId: projectId,
-      );
+      await for (final attendanceList
+          in firestoreService.streamAttendanceByUser(user.uid)) {
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        int count = 0;
+        for (final att in attendanceList) {
+          final attDate = DateTime(
+            att.checkInTime.year,
+            att.checkInTime.month,
+            att.checkInTime.day,
+          );
+          if (attDate == today && att.projectId == projectId) {
+            count++;
+          }
+        }
+        yield count;
+      }
     } catch (e) {
-      return 0;
+      yield 0;
     }
   },
 );

@@ -238,8 +238,9 @@ class SupervisorDashboardScreen extends ConsumerWidget {
 
               const SizedBox(height: 12),
 
-              supervisorProject.when(
-                data: (project) {
+              Builder(
+                builder: (context) {
+                  final project = supervisorProject;
                   if (project == null) {
                     return Card(
                       child: Padding(
@@ -336,13 +337,6 @@ class SupervisorDashboardScreen extends ConsumerWidget {
                     ),
                   );
                 },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (error, stack) => Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text('Error loading project: $error'),
-                  ),
-                ),
               ),
             ],
           ),

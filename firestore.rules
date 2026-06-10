@@ -134,7 +134,10 @@ service cloud.firestore {
                         request.resource.data.role == resource.data.role &&
                         request.resource.data.status == resource.data.status &&
                         request.resource.data.companyId == resource.data.companyId) ||
-                       (isCompanyAdmin() && canAccessCompany(resource.data.companyId));
+                       (isCompanyAdmin() && 
+                        canAccessCompany(resource.data.companyId) &&
+                        // RLS: Company admins cannot change user's companyId (prevent cross-company data leaks)
+                        request.resource.data.companyId == resource.data.companyId);
       
       // Delete: Only super admin and company admin (for same company)
       allow delete: if isSuperAdmin() || 
@@ -157,7 +160,10 @@ service cloud.firestore {
       
       // Update: Super admin updates any, company admin updates same company
       allow update: if isSuperAdmin() || 
-                       (isCompanyAdmin() && canAccessCompany(resource.data.companyId));
+                       (isCompanyAdmin() && 
+                        canAccessCompany(resource.data.companyId) &&
+                        // RLS: Project companyId cannot be changed (prevent cross-company data leaks)
+                        request.resource.data.companyId == resource.data.companyId);
       
       // Delete: Super admin or company admin (same company)
       allow delete: if isSuperAdmin() || 
@@ -183,7 +189,9 @@ service cloud.firestore {
       // Update: Super admin updates any, company admin/supervisor update same company
       allow update: if isSuperAdmin() || 
                        (canAccessCompany(resource.data.companyId) && 
-                        (isOwner(resource.data.userId) || isCompanyAdminOrSupervisor()));
+                        (isOwner(resource.data.userId) || isCompanyAdminOrSupervisor()) &&
+                        // RLS: Attendance companyId cannot be changed (prevent cross-company data leaks)
+                        request.resource.data.companyId == resource.data.companyId);
       
       // Delete: Only super admin
       allow delete: if isSuperAdmin();
@@ -205,7 +213,10 @@ service cloud.firestore {
       
       // Update: Super admin or company admin (same company)
       allow update: if isSuperAdmin() || 
-                       (isCompanyAdmin() && canAccessCompany(resource.data.companyId));
+                       (isCompanyAdmin() && 
+                        canAccessCompany(resource.data.companyId) &&
+                        // RLS: Document companyId cannot be changed (prevent cross-company data leaks)
+                        request.resource.data.companyId == resource.data.companyId);
       
       // Delete: Super admin or uploader (same company)
       allow delete: if isSuperAdmin() || 
@@ -269,7 +280,46 @@ service cloud.firestore {
     }
     
     // ============================================
-    // DEVICE RESET REQUESTS (UPDATED)
+    // DEVICE RESET REQUESTS SUBCOLLECTION (ACTUAL PATH)
+    // Path: /users/{userId}/deviceResetRequests/{requestId}
+    // ============================================
+    match /users/{userId}/deviceResetRequests/{requestId} {
+      // Helper: get the employee's data
+      function getResetEmployeeData() {
+        return get(/databases/$(database)/documents/users/$(userId)).data;
+      }
+      
+      // Helper: check if current user is company admin of this employee's company
+      function isResetEmployeeCompanyAdmin() {
+        return isCompanyAdmin() && getCompanyId() == getResetEmployeeData().companyId;
+      }
+      
+      // Read: 
+      //   - Super admin sees all
+      //   - Employee sees only their own requests
+      //   - Company admin/supervisor sees requests for employees in their company
+      allow read: if isSuperAdmin() || 
+                     isOwner(userId) || 
+                     isResetEmployeeCompanyAdmin() ||
+                     (isSupervisor() && getResetEmployeeData().supervisorId == request.auth.uid);
+      
+      // Create: Employee creates own request (same company)
+      allow create: if isOwner(userId) &&
+                       request.resource.data.companyId == getCompanyId() &&
+                       request.resource.data.userId == request.auth.uid &&
+                       request.resource.data.status == 'pending';
+      
+      // Update: Super admin, company admin of same company, or supervisor of the employee
+      allow update: if isSuperAdmin() || 
+                       isResetEmployeeCompanyAdmin() ||
+                       (isSupervisor() && getResetEmployeeData().supervisorId == request.auth.uid);
+      
+      // Delete: Only super admin
+      allow delete: if isSuperAdmin();
+    }
+    
+    // ============================================
+    // DEVICE RESET REQUESTS (TOP-LEVEL - LEGACY)
     // ============================================
     match /deviceResetRequests/{requestId} {
       // Read: Super admin sees all, others see same company

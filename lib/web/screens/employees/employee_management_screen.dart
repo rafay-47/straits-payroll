@@ -3,17 +3,42 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/models/user_model.dart';
 import '../../../shared/providers/auth_provider.dart';
 import '../../../shared/constants/app_colors.dart';
+import '../../../mobile/screens/supervisor/employee_list_screen.dart'
+    show supervisorEmployeesProvider;
 import 'add_employee_dialog.dart';
 
-/// Provider for all users (employees, supervisors, admins)
-final allUsersProvider = FutureProvider<List<UserModel>>((ref) async {
+/// Provider for all users (employees, supervisors, admins) - real-time
+///
+/// Visibility rules:
+///  - Super admin: all users across the platform
+///  - Company admin: all users in their company
+///  - Supervisor: their assigned employees (any status)
+final allUsersProvider = StreamProvider<List<UserModel>>((ref) async* {
   final firestoreService = ref.watch(firestoreServiceProvider);
-  
+  final currentUser = ref.watch(currentUserProvider).value;
+
   try {
-    return await firestoreService.getAllUsers();
+    if (currentUser == null) {
+      yield [];
+      return;
+    }
+    // Super admin sees all users
+    if (currentUser.role == 'superadmin') {
+      yield* firestoreService.streamAllUsers();
+    }
+    // Supervisors see only their assigned employees
+    else if (currentUser.isSupervisor) {
+      yield* firestoreService.streamEmployeesBySupervisor(currentUser.uid);
+    }
+    // Company admins see all company users
+    else if (currentUser.companyId != null) {
+      yield* firestoreService.streamAllUsersForCompany(currentUser.companyId!);
+    } else {
+      yield [];
+    }
   } catch (e) {
-    print('Error fetching all users: $e');
-    return [];
+    print('Error fetching all users stream: $e');
+    yield [];
   }
 });
 
@@ -27,9 +52,10 @@ class EmployeeManagementScreen extends ConsumerStatefulWidget {
 }
 
 class _EmployeeManagementScreenState
-    extends ConsumerState<EmployeeManagementScreen> with SingleTickerProviderStateMixin {
+    extends ConsumerState<EmployeeManagementScreen> with TickerProviderStateMixin {
   String _searchQuery = '';
-  late TabController _tabController;
+  TabController? _tabController;
+  int _lastTabLength = 0;
 
   String _getEmployeeIdText(UserModel user) {
     return user.employeeId ??
@@ -39,15 +65,18 @@ class _EmployeeManagementScreenState
         'N/A';
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+  TabController _ensureTabController(int length) {
+    if (_tabController == null || _lastTabLength != length) {
+      _tabController?.dispose();
+      _tabController = TabController(length: length, vsync: this);
+      _lastTabLength = length;
+    }
+    return _tabController!;
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
+    _tabController?.dispose();
     super.dispose();
   }
 
@@ -55,33 +84,49 @@ class _EmployeeManagementScreenState
   Widget build(BuildContext context) {
     final allUsersAsync = ref.watch(allUsersProvider);
     final currentUserAsync = ref.watch(currentUserProvider);
+    final currentUser = currentUserAsync.asData?.value;
+    final isSupervisor = currentUser != null && currentUser.isSupervisor;
+    // Supervisors have a single "My Employees" tab. Admins have four.
+    final tabLength = isSupervisor ? 1 : 4;
+    final tabController = _ensureTabController(tabLength);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Employee Management'),
-        backgroundColor: AppColors.primary,
+        title: Text(isSupervisor
+            ? 'My Employees'
+            : 'Employee Management'),
+        backgroundColor: isSupervisor
+            ? AppColors.supervisorColor
+            : AppColors.primary,
         foregroundColor: Colors.white,
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
               ref.invalidate(allUsersProvider);
+              if (isSupervisor) {
+                ref.invalidate(supervisorEmployeesProvider);
+              }
             },
             tooltip: 'Refresh',
           ),
           const SizedBox(width: 8),
         ],
         bottom: TabBar(
-          controller: _tabController,
+          controller: tabController,
           labelColor: Colors.white,
           unselectedLabelColor: Colors.white70,
           indicatorColor: Colors.white,
-          tabs: const [
-            Tab(text: 'All Users'),
-            Tab(text: 'Supervisors'),
-            Tab(text: 'Employees'),
-            Tab(text: 'Pending'),
-          ],
+          tabs: isSupervisor
+              ? const [
+                  Tab(text: 'My Employees'),
+                ]
+              : const [
+                  Tab(text: 'All Users'),
+                  Tab(text: 'Supervisors'),
+                  Tab(text: 'Employees'),
+                  Tab(text: 'Pending'),
+                ],
         ),
       ),
       body: Padding(
@@ -89,13 +134,15 @@ class _EmployeeManagementScreenState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header with search and add button
+            // Header with search and add button (Add button hidden for supervisors)
             Row(
               children: [
                 Expanded(
                   child: TextField(
                     decoration: InputDecoration(
-                      hintText: 'Search by name, email, or ID...',
+                      hintText: isSupervisor
+                          ? 'Search team by name, email, or ID...'
+                          : 'Search by name, email, or ID...',
                       prefixIcon: const Icon(Icons.search),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
@@ -108,13 +155,20 @@ class _EmployeeManagementScreenState
                     },
                   ),
                 ),
+                // Add button is shown for both admins and supervisors.
+                // Supervisors can only create employees (not supervisors
+                // or admins) - the dialog hides those roles for them.
                 const SizedBox(width: 16),
                 ElevatedButton.icon(
                   onPressed: () => _showAddEmployeeDialog(context),
                   icon: const Icon(Icons.person_add),
-                  label: const Text('Add Employee/Supervisor'),
+                  label: Text(isSupervisor
+                      ? 'Add Employee'
+                      : 'Add Employee/Supervisor'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
+                    backgroundColor: isSupervisor
+                        ? AppColors.supervisorColor
+                        : AppColors.primary,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 24,
@@ -126,17 +180,34 @@ class _EmployeeManagementScreenState
             ),
             const SizedBox(height: 24),
 
-            // Statistics Cards
+            // Statistics Cards - Different layout for supervisors
             allUsersAsync.when(
               data: (users) {
                 final scopedUsers = _applyUserScope(
                   users,
                   currentUserAsync.asData?.value,
+                  'all',
                 );
-                final supervisors =
-                    scopedUsers.where((u) => u.role == 'supervisor').length;
                 final employees =
                     scopedUsers.where((u) => u.role == 'employee').length;
+
+                if (isSupervisor) {
+                  // Supervisor: show only "My Employees" stat
+                  return Row(
+                    children: [
+                      _buildStatCard(
+                        'My Employees',
+                        '$employees',
+                        Icons.people,
+                        AppColors.supervisorColor,
+                      ),
+                    ],
+                  );
+                }
+
+                // Admin: show all stats
+                final supervisors =
+                    scopedUsers.where((u) => u.role == 'supervisor').length;
                 final pending =
                     scopedUsers.where((u) => u.status == 'pending').length;
 
@@ -180,13 +251,22 @@ class _EmployeeManagementScreenState
             // Users Table
             Expanded(
               child: TabBarView(
-                controller: _tabController,
-                children: [
-                  _buildUsersTable(allUsersAsync, 'all', currentUserAsync.asData?.value),
-                  _buildUsersTable(allUsersAsync, 'supervisor', currentUserAsync.asData?.value),
-                  _buildUsersTable(allUsersAsync, 'employee', currentUserAsync.asData?.value),
-                  _buildUsersTable(allUsersAsync, 'pending', currentUserAsync.asData?.value),
-                ],
+                controller: tabController,
+                children: isSupervisor
+                    ? [
+                        _buildUsersTable(
+                            allUsersAsync, 'employee', currentUser),
+                      ]
+                    : [
+                        _buildUsersTable(
+                            allUsersAsync, 'all', currentUser),
+                        _buildUsersTable(
+                            allUsersAsync, 'supervisor', currentUser),
+                        _buildUsersTable(
+                            allUsersAsync, 'employee', currentUser),
+                        _buildUsersTable(
+                            allUsersAsync, 'pending', currentUser),
+                      ],
               ),
             ),
           ],
@@ -246,7 +326,7 @@ class _EmployeeManagementScreenState
     return usersAsync.when(
       data: (users) {
         // Apply filters
-        var filteredUsers = _applyUserScope(users, currentUser);
+        var filteredUsers = _applyUserScope(users, currentUser, filter);
 
         // Filter by role/status
         if (filter == 'supervisor') {
@@ -275,15 +355,19 @@ class _EmployeeManagementScreenState
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  Icons.people_outline,
+                  filter == 'pending'
+                      ? Icons.pending_actions
+                      : Icons.people_outline,
                   size: 64,
                   color: Colors.grey[400],
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  _searchQuery.isEmpty
-                      ? 'No users found'
-                      : 'No matching users found',
+                  _searchQuery.isNotEmpty
+                      ? 'No matching users found'
+                      : (filter == 'pending'
+                          ? 'No pending approvals'
+                          : 'No users found'),
                   style: TextStyle(
                     fontSize: 18,
                     color: Colors.grey[600],
@@ -540,7 +624,7 @@ class _EmployeeManagementScreenState
         setState(() {
           _searchQuery = '';
         });
-        _tabController.animateTo(0);
+        _tabController?.animateTo(0);
       }
       // Refresh list after dialog closes
       ref.invalidate(allUsersProvider);
@@ -689,26 +773,32 @@ class _EmployeeManagementScreenState
     );
   }
 
-  List<UserModel> _applyUserScope(List<UserModel> users, UserModel? currentUser) {
+  /// Apply defense-in-depth row-level filtering for the current viewer.
+  ///
+  /// The [allUsersProvider] already returns a scoped list (assigned
+  /// employees for supervisors, all company users for admins), but
+  /// this filter is the second line of defence so that no row ever
+  /// leaks into the wrong table.
+  List<UserModel> _applyUserScope(
+    List<UserModel> users,
+    UserModel? currentUser, [
+    String activeFilter = 'all',
+  ]) {
     if (currentUser == null) return users;
     final currentRole = currentUser.role.toLowerCase();
-    
+
     // Admins and superadmins see all users in their company (or all for superadmin)
-    if (currentRole == 'admin' || currentRole == 'companyadmin' || currentRole == 'superadmin') {
+    if (currentRole == 'admin' ||
+        currentRole == 'companyadmin' ||
+        currentRole == 'superadmin') {
       return users;
     }
 
-    // Supervisors can only see:
-    // 1. Themselves
-    // 2. Other supervisors in the same company
-    // 3. Employees assigned to them
+    // Supervisors: only their assigned employees.
     return users
-        .where((u) {
-          if (u.uid == currentUser.uid) return true;
-          if (u.role.toLowerCase() == 'supervisor') return true;
-          if (u.role.toLowerCase() == 'employee' && u.supervisorId == currentUser.uid) return true;
-          return false;
-        })
+        .where((u) =>
+            u.role.toLowerCase() == 'employee' &&
+            u.supervisorId == currentUser.uid)
         .toList();
   }
 

@@ -13,28 +13,105 @@ final locationServiceProvider =
 final biometricServiceProvider =
     Provider<BiometricService>((ref) => BiometricService());
 
-// Today's Attendance Provider (most recent check-in)
-final todayAttendanceProvider = FutureProvider.autoDispose
-    .family<AttendanceModel?, String>((ref, userId) async {
-  return await ref.watch(firestoreServiceProvider).getTodayAttendance(userId);
+// Today's Attendance Provider (most recent check-in) - real-time
+final todayAttendanceProvider = StreamProvider.autoDispose
+    .family<AttendanceModel?, String>((ref, userId) async* {
+  final firestoreService = ref.watch(firestoreServiceProvider);
+  try {
+    await for (final attendanceList
+        in firestoreService.streamAttendanceByUser(userId)) {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      AttendanceModel? todayAttendance;
+      for (final att in attendanceList) {
+        final attDate = DateTime(
+          att.checkInTime.year,
+          att.checkInTime.month,
+          att.checkInTime.day,
+        );
+        if (attDate == today) {
+          todayAttendance = att;
+          break;
+        }
+      }
+      yield todayAttendance;
+    }
+  } catch (e) {
+    print('Error in todayAttendanceProvider stream: $e');
+    yield null;
+  }
 });
 
-// Today's Total Working Hours Provider (all sessions combined)
-final todayTotalWorkingHoursProvider = FutureProvider.autoDispose
-    .family<Duration, String>((ref, userId) async {
-  return await ref.watch(firestoreServiceProvider).getTodayTotalWorkingHours(userId);
+// Today's Total Working Hours Provider (all sessions combined) - real-time
+final todayTotalWorkingHoursProvider = StreamProvider.autoDispose
+    .family<Duration, String>((ref, userId) async* {
+  final firestoreService = ref.watch(firestoreServiceProvider);
+  try {
+    await for (final attendanceList
+        in firestoreService.streamAttendanceByUser(userId)) {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      Duration total = Duration.zero;
+      for (final att in attendanceList) {
+        final attDate = DateTime(
+          att.checkInTime.year,
+          att.checkInTime.month,
+          att.checkInTime.day,
+        );
+        if (attDate == today && att.checkOutTime != null) {
+          total += att.checkOutTime!.difference(att.checkInTime);
+        }
+      }
+      yield total;
+    }
+  } catch (e) {
+    print('Error in todayTotalWorkingHoursProvider stream: $e');
+    yield Duration.zero;
+  }
 });
 
-// Attendance History Provider
-final attendanceHistoryProvider = FutureProvider.autoDispose
-    .family<List<AttendanceModel>, String>((ref, userId) async {
-  return await ref.watch(firestoreServiceProvider).getAttendanceHistory(userId);
+// Attendance History Provider - real-time
+final attendanceHistoryProvider = StreamProvider.autoDispose
+    .family<List<AttendanceModel>, String>((ref, userId) {
+  final firestoreService = ref.watch(firestoreServiceProvider);
+  return firestoreService.streamAttendanceByUser(userId);
 });
 
-// Weekly Stats Provider
-final weeklyStatsProvider = FutureProvider.autoDispose
-    .family<Map<String, dynamic>, String>((ref, userId) async {
-  return await ref.watch(firestoreServiceProvider).getWeeklyStats(userId);
+// Weekly Stats Provider - real-time
+final weeklyStatsProvider = StreamProvider.autoDispose
+    .family<Map<String, dynamic>, String>((ref, userId) async* {
+  final firestoreService = ref.watch(firestoreServiceProvider);
+  try {
+    await for (final attendanceList
+        in firestoreService.streamAttendanceByUser(userId)) {
+      final now = DateTime.now();
+      final weekStart = now.subtract(Duration(days: now.weekday - 1));
+      final weekStartDay = DateTime(weekStart.year, weekStart.month, weekStart.day);
+      final weekAttendance = attendanceList.where((att) {
+        return att.checkInTime.isAfter(weekStartDay);
+      }).toList();
+      final totalHours = weekAttendance.fold<double>(0.0, (sum, att) {
+        if (att.checkOutTime != null) {
+          return sum + att.checkOutTime!.difference(att.checkInTime).inMinutes / 60.0;
+        }
+        return sum;
+      });
+      yield {
+        'totalSessions': weekAttendance.length,
+        'totalHours': totalHours,
+        'averageHours': weekAttendance.isEmpty
+            ? 0.0
+            : totalHours / weekAttendance.length,
+      };
+    }
+  } catch (e) {
+    print('Error in weeklyStatsProvider stream: $e');
+    yield {
+      'totalSessions': 0,
+      'totalHours': 0.0,
+      'averageHours': 0.0,
+    };
+  }
 });
 
 // Attendance Controller

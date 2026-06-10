@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 import '../constants/app_constants.dart';
 import '../models/user_model.dart';
 import 'company_service.dart';
@@ -7,6 +8,10 @@ import 'company_service.dart';
 /// Enhanced authentication service for multi-tenant system
 /// Supports: Super Admin, Company Admin, Supervisor, Employee
 class AuthService {
+  /// Name used for the secondary Firebase app that handles user creation
+  /// without disturbing the currently signed-in user's session.
+  static const String _kSecondaryAppName = 'SecondaryUserCreatorApp';
+
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final CompanyService _companyService = CompanyService();
@@ -197,6 +202,12 @@ class AuthService {
   // ============================================
 
   /// Create company admin or supervisor account
+  ///
+  /// Uses a *secondary* Firebase app instance to create the Auth user so
+  /// the currently signed-in user is NOT replaced by the new account.
+  /// Without this workaround, calling `createUserWithEmailAndPassword` on
+  /// the default auth instance would sign the new user in immediately and
+  /// log out the current admin/supervisor.
   Future<UserCredential> createCompanyUser({
     required String companyId,
     required String email,
@@ -215,17 +226,46 @@ class AuthService {
         throw 'Company not found';
       }
 
-      // Create Firebase Auth account
-      final credential = await _auth.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+      // Get or create a secondary Firebase app so the new user's session
+      // is isolated from the current signed-in user's session.
+      final FirebaseApp secondaryApp = await _getOrCreateSecondaryApp();
+      final FirebaseAuth secondaryAuth =
+          FirebaseAuth.instanceFor(app: secondaryApp);
 
-      return credential;
+      try {
+        // Create the Firebase Auth account on the *secondary* auth
+        // instance. This signs in as the new user on the secondary app
+        // only, leaving the main app's auth state untouched.
+        final credential = await secondaryAuth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+        return credential;
+      } finally {
+        // Clean up the secondary session so the next call starts fresh.
+        try {
+          await secondaryAuth.signOut();
+        } catch (_) {
+          // Best-effort cleanup; ignore errors here.
+        }
+      }
     } on FirebaseAuthException catch (e) {
       throw _handleAuthException(e);
     } catch (e) {
       rethrow;
+    }
+  }
+
+  /// Returns an existing secondary Firebase app or initialises a new one.
+  /// The secondary app reuses the default app's Firebase options.
+  Future<FirebaseApp> _getOrCreateSecondaryApp() async {
+    try {
+      return Firebase.app(_kSecondaryAppName);
+    } catch (_) {
+      return Firebase.initializeApp(
+        name: _kSecondaryAppName,
+        options: Firebase.app().options,
+      );
     }
   }
 

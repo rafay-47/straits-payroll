@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/user_model.dart';
@@ -2031,21 +2033,30 @@ class FirestoreService {
     }
   }
 
-  /// Check if user can request device reset (based on monthly limit)
+  /// Check if user can request device reset (based on monthly limit).
+  ///
+  /// Single-field filter on `requestedAt` only; status is checked on
+  /// the client to avoid a composite index on the subcollection.
   Future<bool> canRequestDeviceReset(String userId, int monthlyLimit) async {
     try {
       final now = DateTime.now();
       final firstDayOfMonth = DateTime(now.year, now.month, 1);
-      
+
       final snapshot = await _firestore
           .collection(AppConstants.usersCollection)
           .doc(userId)
           .collection(AppConstants.deviceResetRequestsSubcollection)
-          .where('requestedAt', isGreaterThanOrEqualTo: firstDayOfMonth.toIso8601String())
-          .where('status', whereIn: [AppConstants.statusPending, 'approved'])
+          .where('requestedAt',
+              isGreaterThanOrEqualTo: firstDayOfMonth.toIso8601String())
           .get();
 
-      return snapshot.docs.length < monthlyLimit;
+      final countThisMonth = snapshot.docs.where((doc) {
+        final status = (doc.data()['status'] as String? ?? '').toLowerCase();
+        return status == AppConstants.statusPending.toLowerCase() ||
+            status == AppConstants.statusApproved.toLowerCase();
+      }).length;
+
+      return countThisMonth < monthlyLimit;
     } catch (e) {
       throw 'Failed to check device reset eligibility: $e';
     }
@@ -2100,6 +2111,51 @@ class FirestoreService {
       });
     } catch (e) {
       throw 'Failed to reject device reset request: $e';
+    }
+  }
+
+  /// Admin-initiated device reset (proactive, no pending request needed).
+  /// Clears the bound device for [userId] so the employee can register a
+  /// new device on next login. Also writes an audit log entry.
+  Future<void> adminResetEmployeeDevice({
+    required String userId,
+    required String adminId,
+  }) async {
+    try {
+      // Read current device info for the audit log snapshot.
+      final userDoc = await _firestore
+          .collection(AppConstants.usersCollection)
+          .doc(userId)
+          .get();
+      final userData = userDoc.data();
+      final previousDeviceInfo = userData?['deviceInfo'];
+      final companyId = userData?['companyId'] as String? ?? '';
+
+      // Clear the device binding on the user document.
+      await updateUser(userId, {
+        'deviceInfo': null,
+        'isDeviceRegistered': false,
+      });
+
+      // Write an audit log entry so the action is traceable.
+      await createAuditLog(
+        AuditLogModel(
+          logId: '${DateTime.now().millisecondsSinceEpoch}_$userId',
+          companyId: companyId.isEmpty ? null : companyId,
+          userId: adminId,
+          action: AuditLogModel.actionApproveDeviceReset,
+          entityType: 'user',
+          entityId: userId,
+          details: {
+            'previousDevice': previousDeviceInfo,
+            'resetType': 'admin_proactive',
+          },
+          timestamp: DateTime.now(),
+          platform: 'web',
+        ),
+      );
+    } catch (e) {
+      throw 'Failed to reset device for user: $e';
     }
   }
 
@@ -2254,6 +2310,386 @@ class FirestoreService {
     } catch (e) {
       throw 'Failed to perform batch write: $e';
     }
+  }
+
+  // ============================================
+  // REAL-TIME STREAM METHODS
+  // These methods return Streams that emit updated data
+  // whenever the underlying Firestore documents change.
+  // ============================================
+
+  /// Real-time stream of current user profile
+  Stream<UserModel?> streamUser(String userId) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .doc(userId)
+        .snapshots()
+        .map((doc) {
+      if (!doc.exists) return null;
+      return UserModel.fromMap(doc.data()!);
+    });
+  }
+
+  /// Real-time stream of all users (filtered by company) for a specific company
+  Stream<List<UserModel>> streamAllUsersForCompany(String companyId) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .where('companyId', isEqualTo: companyId)
+        .snapshots()
+        .map((snapshot) {
+      final users = <UserModel>[];
+      for (final doc in snapshot.docs) {
+        try {
+          users.add(UserModel.fromMap(doc.data()));
+        } catch (e) {
+          print('Error parsing user document ${doc.id}: $e');
+        }
+      }
+      users.sort((a, b) {
+        if (a.createdAt == null && b.createdAt == null) return 0;
+        if (a.createdAt == null) return 1;
+        if (b.createdAt == null) return -1;
+        return b.createdAt!.compareTo(a.createdAt!);
+      });
+      return users;
+    });
+  }
+
+  /// Real-time stream of all users (super admin sees all)
+  Stream<List<UserModel>> streamAllUsers() {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .snapshots()
+        .map((snapshot) {
+      final users = <UserModel>[];
+      for (final doc in snapshot.docs) {
+        try {
+          users.add(UserModel.fromMap(doc.data()));
+        } catch (e) {
+          print('Error parsing user document ${doc.id}: $e');
+        }
+      }
+      users.sort((a, b) {
+        if (a.createdAt == null && b.createdAt == null) return 0;
+        if (a.createdAt == null) return 1;
+        if (b.createdAt == null) return -1;
+        return b.createdAt!.compareTo(a.createdAt!);
+      });
+      return users;
+    });
+  }
+
+  /// Real-time stream of pending employees for a company.
+  ///
+  /// Single-field equality filter on `companyId` only; status and role
+  /// are filtered client-side to avoid a composite index.
+  Stream<List<UserModel>> streamPendingEmployeesForCompany(String companyId) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .where('companyId', isEqualTo: companyId)
+        .snapshots()
+        .map((snapshot) {
+      final users = <UserModel>[];
+      for (final doc in snapshot.docs) {
+        try {
+          final user = UserModel.fromMap(doc.data());
+          if (user.status.toLowerCase() !=
+              AppConstants.statusPending.toLowerCase()) {
+            continue;
+          }
+          if (user.role == AppConstants.roleEmployee ||
+              user.role == AppConstants.roleSupervisor) {
+            users.add(user);
+          }
+        } catch (e) {
+          print('Error parsing user document ${doc.id}: $e');
+        }
+      }
+      return users;
+    });
+  }
+
+  /// Real-time stream of employees in a company that currently have a
+  /// device bound. Used by the admin "Active Devices" tab to allow
+  /// proactive device resets without requiring a submitted request.
+  ///
+  /// Uses a single-field equality filter on `companyId` (auto-indexed
+  /// by Firestore) and filters by `isDeviceRegistered` / `role` on the
+  /// client side to avoid a composite index requirement.
+  Stream<List<UserModel>> streamBoundDevicesForCompany(String companyId) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .where('companyId', isEqualTo: companyId)
+        .snapshots()
+        .map((snapshot) {
+      final users = <UserModel>[];
+      for (final doc in snapshot.docs) {
+        try {
+          final user = UserModel.fromMap(doc.data());
+          if (user.role == AppConstants.roleEmployee &&
+              user.hasDeviceBound) {
+            users.add(user);
+          }
+        } catch (e) {
+          print('Error parsing user document ${doc.id}: $e');
+        }
+      }
+      return users;
+    });
+  }
+
+  /// Real-time stream of all pending employees (super admin)
+  Stream<List<UserModel>> streamAllPendingEmployees() {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .where('status', isEqualTo: AppConstants.statusPending)
+        .snapshots()
+        .map((snapshot) {
+      final users = <UserModel>[];
+      for (final doc in snapshot.docs) {
+        try {
+          final user = UserModel.fromMap(doc.data());
+          if (user.role == AppConstants.roleEmployee ||
+              user.role == AppConstants.roleSupervisor) {
+            users.add(user);
+          }
+        } catch (e) {
+          print('Error parsing user document ${doc.id}: $e');
+        }
+      }
+      return users;
+    });
+  }
+
+  /// Real-time stream of approved employees for a company
+  Stream<List<UserModel>> streamApprovedEmployeesForCompany(String companyId) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .where('companyId', isEqualTo: companyId)
+        .where('role', isEqualTo: AppConstants.roleEmployee)
+        .where('status', whereIn: [AppConstants.statusApproved, AppConstants.statusActive])
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => UserModel.fromMap(doc.data()))
+          .toList();
+    });
+  }
+
+  /// Real-time stream of all approved employees (super admin)
+  Stream<List<UserModel>> streamAllApprovedEmployees() {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .where('role', isEqualTo: AppConstants.roleEmployee)
+        .where('status', whereIn: [AppConstants.statusApproved, AppConstants.statusActive])
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => UserModel.fromMap(doc.data()))
+          .toList();
+    });
+  }
+
+  /// Real-time stream of users by role for a company
+  Stream<List<UserModel>> streamUsersByRoleForCompany({
+    required String role,
+    required String companyId,
+  }) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .where('role', isEqualTo: role)
+        .where('companyId', isEqualTo: companyId)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => UserModel.fromMap(doc.data()))
+          .toList();
+    });
+  }
+
+  /// Real-time stream of users by role (super admin)
+  Stream<List<UserModel>> streamUsersByRole(String role) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .where('role', isEqualTo: role)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => UserModel.fromMap(doc.data()))
+          .toList();
+    });
+  }
+
+  /// Real-time stream of employees by supervisor
+  Stream<List<UserModel>> streamEmployeesBySupervisor(String supervisorId) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .where('role', isEqualTo: AppConstants.roleEmployee)
+        .where('supervisorId', isEqualTo: supervisorId)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => UserModel.fromMap(doc.data()))
+          .toList();
+    });
+  }
+
+  /// Real-time stream of projects for a company
+  Stream<List<ProjectModel>> streamProjectsForCompany(String companyId) {
+    return _firestore
+        .collection(AppConstants.projectsCollection)
+        .where('companyId', isEqualTo: companyId)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => ProjectModel.fromMap(doc.data()))
+          .toList();
+    });
+  }
+
+  /// Real-time stream of all projects (super admin)
+  Stream<List<ProjectModel>> streamAllProjects() {
+    return _firestore
+        .collection(AppConstants.projectsCollection)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => ProjectModel.fromMap(doc.data()))
+          .toList();
+    });
+  }
+
+  /// Real-time stream of attendance for a user
+  Stream<List<AttendanceModel>> streamAttendanceByUser(String userId) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .doc(userId)
+        .collection(AppConstants.attendanceSubcollection)
+        .orderBy('checkInTime', descending: true)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => AttendanceModel.fromMap(doc.data()))
+          .toList();
+    });
+  }
+
+  /// Real-time stream of documents for a user
+  Stream<List<DocumentModel>> streamDocumentsByUser(String userId) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .doc(userId)
+        .collection(AppConstants.documentsSubcollection)
+        .orderBy('uploadedAt', descending: true)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => DocumentModel.fromMap(doc.data()))
+          .toList();
+    });
+  }
+
+  /// Real-time stream of device reset requests for a company.
+  ///
+  /// Subscribes to the company's users (single-field query, no index
+  /// required) and, for each user, opens a per-user subcollection
+  /// stream of their device reset requests. The streams are merged
+  /// into a single emission that updates whenever any source changes.
+  ///
+  /// This replaces a `collectionGroup` query which would need a
+  /// `COLLECTION_GROUP_ASC` index on the `deviceResetRequests` field
+  /// `companyId` (not creatable without Firebase Console access).
+  Stream<List<DeviceResetRequestModel>>
+      streamDeviceResetRequestsForCompany(String companyId) {
+    final controller = StreamController<List<DeviceResetRequestModel>>();
+    final userSubs = <String, StreamSubscription<List<DeviceResetRequestModel>>>{};
+    final requestsByUser = <String, List<DeviceResetRequestModel>>{};
+
+    void emit() {
+      final all = <DeviceResetRequestModel>[];
+      for (final list in requestsByUser.values) {
+        all.addAll(list);
+      }
+      all.sort((a, b) => b.requestedAt.compareTo(a.requestedAt));
+      controller.add(all);
+    }
+
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? usersSub;
+    usersSub = _firestore
+        .collection(AppConstants.usersCollection)
+        .where('companyId', isEqualTo: companyId)
+        .snapshots()
+        .listen((snapshot) {
+      final ids = snapshot.docs.map((d) => d.id).toSet();
+
+      // Add subscriptions for new users.
+      for (final id in ids) {
+        if (userSubs.containsKey(id)) continue;
+        userSubs[id] = streamUserDeviceResetRequests(id).listen(
+          (list) {
+            requestsByUser[id] = list;
+            emit();
+          },
+          onError: controller.addError,
+        );
+      }
+
+      // Cancel subscriptions for users that left the company.
+      for (final id in userSubs.keys.toList()) {
+        if (ids.contains(id)) continue;
+        userSubs.remove(id)?.cancel();
+        requestsByUser.remove(id);
+      }
+
+      // If there are no users in the company, emit an empty list.
+      if (ids.isEmpty) {
+        requestsByUser.clear();
+        emit();
+      }
+    }, onError: controller.addError);
+
+    controller.onCancel = () async {
+      await usersSub?.cancel();
+      for (final sub in userSubs.values) {
+        await sub.cancel();
+      }
+      userSubs.clear();
+      requestsByUser.clear();
+    };
+
+    return controller.stream;
+  }
+
+  /// Real-time stream of pending device reset requests for a company.
+  /// Backed by [streamDeviceResetRequestsForCompany] with a client-side
+  /// status filter.
+  Stream<List<DeviceResetRequestModel>> streamPendingDeviceResetRequestsForCompany(
+    String companyId,
+  ) {
+    return streamDeviceResetRequestsForCompany(companyId).map((all) {
+      return all
+          .where((r) =>
+              r.status.toLowerCase() ==
+              AppConstants.statusPending.toLowerCase())
+          .toList();
+    });
+  }
+
+  /// Real-time stream of device reset requests for a specific user
+  Stream<List<DeviceResetRequestModel>> streamUserDeviceResetRequests(
+    String userId,
+  ) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .doc(userId)
+        .collection(AppConstants.deviceResetRequestsSubcollection)
+        .orderBy('requestedAt', descending: true)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => DeviceResetRequestModel.fromMap(doc.data()))
+          .toList();
+    });
   }
 }
 

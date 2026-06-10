@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:data_table_2/data_table_2.dart';
 import '../../../shared/models/device_reset_request_model.dart';
+import '../../../shared/models/user_model.dart';
 import '../../../shared/providers/device_reset_provider.dart';
 import '../../../shared/providers/auth_provider.dart';
 import '../../../shared/constants/app_colors.dart';
@@ -17,6 +18,8 @@ class DeviceResetManagementScreen extends ConsumerStatefulWidget {
 class _DeviceResetManagementScreenState extends ConsumerState<DeviceResetManagementScreen> {
   String _selectedFilter = 'all'; // all, pending, approved, rejected
   String _searchQuery = '';
+  String _deviceSearchQuery = '';
+  int _activeTab = 0; // 0 = requests, 1 = active devices
 
   @override
   Widget build(BuildContext context) {
@@ -26,130 +29,477 @@ class _DeviceResetManagementScreenState extends ConsumerState<DeviceResetManagem
       appBar: AppBar(
         title: const Text('Device Reset Management'),
         backgroundColor: AppColors.primary,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: Row(
+            children: [
+              _buildTabButton(
+                index: 0,
+                label: 'Reset Requests',
+                icon: Icons.pending_actions,
+              ),
+              _buildTabButton(
+                index: 1,
+                label: 'Active Devices',
+                icon: Icons.phone_android,
+              ),
+            ],
+          ),
+        ),
       ),
-      body: Column(
-        children: [
-          // Filters and Search
-          Container(
-            padding: const EdgeInsets.all(16),
-            color: Colors.grey.shade100,
-            child: Row(
-              children: [
-                // Filter Dropdown
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey.shade300),
-                  ),
-                  child: DropdownButton<String>(
-                    value: _selectedFilter,
-                    underline: const SizedBox(),
-                    items: const [
-                      DropdownMenuItem(value: 'all', child: Text('All Requests')),
-                      DropdownMenuItem(value: 'pending', child: Text('Pending')),
-                      DropdownMenuItem(value: 'approved', child: Text('Approved')),
-                      DropdownMenuItem(value: 'rejected', child: Text('Rejected')),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() => _selectedFilter = value);
-                      }
-                    },
-                  ),
-                ),
-                const SizedBox(width: 16),
+      body: _activeTab == 0
+          ? _buildRequestsTab(requestsAsync)
+          : _buildActiveDevicesTab(),
+    );
+  }
 
-                // Search
-                Expanded(
-                  child: TextField(
-                    decoration: InputDecoration(
-                      hintText: 'Search by employee name or ID',
-                      prefixIcon: const Icon(Icons.search),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      filled: true,
-                      fillColor: Colors.white,
-                    ),
-                    onChanged: (value) {
-                      setState(() => _searchQuery = value.toLowerCase());
-                    },
-                  ),
-                ),
-                const SizedBox(width: 16),
-
-                // Refresh Button
-                ElevatedButton.icon(
-                  onPressed: () {
-                    ref.invalidate(allDeviceResetRequestsProvider);
-                  },
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Refresh'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  ),
-                ),
-              ],
+  Widget _buildTabButton({
+    required int index,
+    required String label,
+    required IconData icon,
+  }) {
+    final selected = _activeTab == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () => setState(() => _activeTab = index),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: selected ? Colors.white : Colors.transparent,
+                width: 3,
+              ),
             ),
           ),
-
-          // Data Table
-          Expanded(
-            child: requestsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, stack) => Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.error, color: Colors.red, size: 64),
-                    const SizedBox(height: 16),
-                    Text('Error: $error'),
-                  ],
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 18, color: Colors.white),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: selected ? FontWeight.bold : FontWeight.normal,
                 ),
               ),
-              data: (requests) {
-                // Filter requests
-                final filteredRequests = requests.where((request) {
-                  // Filter by status
-                  if (_selectedFilter != 'all' && request.status.toLowerCase() != _selectedFilter) {
-                    return false;
-                  }
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-                  // Filter by search query
-                  if (_searchQuery.isNotEmpty) {
-                    return request.userName.toLowerCase().contains(_searchQuery) ||
-                        request.userId.toLowerCase().contains(_searchQuery);
-                  }
+  Widget _buildRequestsTab(AsyncValue<List<DeviceResetRequestModel>> requestsAsync) {
+    return Column(
+      children: [
+        // Filters and Search
+        Container(
+          padding: const EdgeInsets.all(16),
+          color: Colors.grey.shade100,
+          child: Row(
+            children: [
+              // Filter Dropdown
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: DropdownButton<String>(
+                  value: _selectedFilter,
+                  underline: const SizedBox(),
+                  items: const [
+                    DropdownMenuItem(value: 'all', child: Text('All Requests')),
+                    DropdownMenuItem(value: 'pending', child: Text('Pending')),
+                    DropdownMenuItem(value: 'approved', child: Text('Approved')),
+                    DropdownMenuItem(value: 'rejected', child: Text('Rejected')),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => _selectedFilter = value);
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 16),
 
-                  return true;
-                }).toList();
+              // Search
+              Expanded(
+                child: TextField(
+                  decoration: InputDecoration(
+                    hintText: 'Search by employee name or ID',
+                    prefixIcon: const Icon(Icons.search),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    filled: true,
+                    fillColor: Colors.white,
+                  ),
+                  onChanged: (value) {
+                    setState(() => _searchQuery = value.toLowerCase());
+                  },
+                ),
+              ),
+              const SizedBox(width: 16),
 
-                if (filteredRequests.isEmpty) {
-                  return Center(
-                    child: Column(
+              // Refresh Button
+              ElevatedButton.icon(
+                onPressed: () {
+                  ref.invalidate(allDeviceResetRequestsProvider);
+                },
+                icon: const Icon(Icons.refresh),
+                label: const Text('Refresh'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Data Table
+        Expanded(
+          child: requestsAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, stack) => Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.error, color: Colors.red, size: 64),
+                  const SizedBox(height: 16),
+                  Text('Error: $error'),
+                ],
+              ),
+            ),
+            data: (requests) {
+              // Filter requests
+              final filteredRequests = requests.where((request) {
+                // Filter by status
+                if (_selectedFilter != 'all' && request.status.toLowerCase() != _selectedFilter) {
+                  return false;
+                }
+
+                // Filter by search query
+                if (_searchQuery.isNotEmpty) {
+                  return request.userName.toLowerCase().contains(_searchQuery) ||
+                      request.userId.toLowerCase().contains(_searchQuery);
+                }
+
+                return true;
+              }).toList();
+
+              if (filteredRequests.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.inbox, color: Colors.grey, size: 64),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No requests found',
+                        style: TextStyle(color: Colors.grey.shade600, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              return _buildDataTable(filteredRequests);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActiveDevicesTab() {
+    final boundDevicesAsync = ref.watch(boundDevicesForCompanyProvider);
+
+    return Column(
+      children: [
+        // Search and Refresh
+        Container(
+          padding: const EdgeInsets.all(16),
+          color: Colors.grey.shade100,
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  decoration: InputDecoration(
+                    hintText: 'Search by employee name or ID...',
+                    prefixIcon: const Icon(Icons.search),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    filled: true,
+                    fillColor: Colors.white,
+                  ),
+                  onChanged: (value) {
+                    setState(() => _deviceSearchQuery = value.toLowerCase());
+                  },
+                ),
+              ),
+              const SizedBox(width: 16),
+              ElevatedButton.icon(
+                onPressed: () {
+                  ref.invalidate(boundDevicesForCompanyProvider);
+                },
+                icon: const Icon(Icons.refresh),
+                label: const Text('Refresh'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        Expanded(
+          child: boundDevicesAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, stack) => Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.error, color: Colors.red, size: 64),
+                  const SizedBox(height: 16),
+                  Text('Error: $error'),
+                ],
+              ),
+            ),
+            data: (employees) {
+              final filtered = employees.where((u) {
+                if (_deviceSearchQuery.isEmpty) return true;
+                return u.name.toLowerCase().contains(_deviceSearchQuery) ||
+                    u.uid.toLowerCase().contains(_deviceSearchQuery) ||
+                    (u.employeeId ?? '')
+                        .toLowerCase()
+                        .contains(_deviceSearchQuery);
+              }).toList();
+
+              if (filtered.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.phone_android,
+                        color: Colors.grey,
+                        size: 64,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No active device bindings',
+                        style: TextStyle(color: Colors.grey.shade600, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              return _buildActiveDevicesTable(filtered);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActiveDevicesTable(List<UserModel> employees) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      child: DataTable2(
+        columnSpacing: 12,
+        horizontalMargin: 12,
+        minWidth: 1000,
+        columns: const [
+          DataColumn2(label: Text('Employee'), size: ColumnSize.L),
+          DataColumn2(label: Text('Employee ID'), size: ColumnSize.M),
+          DataColumn2(label: Text('Device Model'), size: ColumnSize.M),
+          DataColumn2(label: Text('Platform'), size: ColumnSize.S),
+          DataColumn2(label: Text('Device ID'), size: ColumnSize.M),
+          DataColumn2(label: Text('Registered'), size: ColumnSize.S),
+          DataColumn2(label: Text('Actions'), size: ColumnSize.S, fixedWidth: 180),
+        ],
+        rows: employees.map((user) {
+          final device = user.deviceInfo!;
+          return DataRow2(
+            cells: [
+              DataCell(
+                Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor:
+                          AppColors.supervisorColor.withOpacity(0.2),
+                      child: Text(
+                        user.name.isNotEmpty
+                            ? user.name.substring(0, 1).toUpperCase()
+                            : '?',
+                        style: const TextStyle(
+                          color: AppColors.supervisorColor,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.inbox, color: Colors.grey, size: 64),
-                        const SizedBox(height: 16),
                         Text(
-                          'No requests found',
-                          style: TextStyle(color: Colors.grey.shade600, fontSize: 16),
+                          user.name,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          user.email,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade600,
+                          ),
                         ),
                       ],
                     ),
-                  );
-                }
+                  ],
+                ),
+              ),
+              DataCell(Text(
+                user.employeeId ??
+                    user.employeeIdNumber ??
+                    user.systemGeneratedId ??
+                    'N/A',
+              )),
+              DataCell(Text(device.deviceModel)),
+              DataCell(Text(
+                device.platform ?? 'Unknown',
+                style: TextStyle(
+                  color: device.platform?.toLowerCase() == 'ios'
+                      ? Colors.blueGrey
+                      : Colors.green.shade700,
+                ),
+              )),
+              DataCell(
+                Tooltip(
+                  message: device.deviceId,
+                  child: Text(
+                    device.deviceId.length > 12
+                        ? '${device.deviceId.substring(0, 12)}...'
+                        : device.deviceId,
+                    style: const TextStyle(fontFamily: 'monospace'),
+                  ),
+                ),
+              ),
+              DataCell(Text(_formatDate(device.registeredAt))),
+              DataCell(
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.refresh, color: Colors.orange),
+                      tooltip: 'Reset Device',
+                      onPressed: () => _confirmAdminResetDevice(user),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        }).toList(),
+      ),
+    );
+  }
 
-                return _buildDataTable(filteredRequests);
-              },
-            ),
+  Future<void> _confirmAdminResetDevice(UserModel user) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.warning, color: Colors.orange),
+            const SizedBox(width: 8),
+            const Text('Reset Device?'),
+          ],
+        ),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'You are about to reset the device binding for:',
+                style: TextStyle(color: Colors.grey.shade700),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                user.name,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              Text(user.email),
+              const SizedBox(height: 12),
+              Text(
+                'Device: ${user.deviceInfo?.deviceModel ?? 'Unknown'}',
+                style: TextStyle(color: Colors.grey.shade700),
+              ),
+              const Divider(height: 24),
+              const Text(
+                'The employee will be required to register a new device on their next login. '
+                'This action is logged in the audit trail.',
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.refresh),
+            label: const Text('Reset Device'),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
           ),
         ],
       ),
     );
+
+    if (confirm != true) return;
+    if (!mounted) return;
+
+    final admin = ref.read(currentUserProvider).value;
+    if (admin == null) return;
+
+    try {
+      await ref
+          .read(deviceResetControllerProvider.notifier)
+          .adminResetEmployeeDevice(userId: user.uid, adminId: admin.uid);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Device reset for ${user.name}'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to reset device: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildDataTable(List<DeviceResetRequestModel> requests) {

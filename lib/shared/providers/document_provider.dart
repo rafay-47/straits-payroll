@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/firestore_service.dart';
 import '../services/storage_service.dart';
 import '../models/document_model.dart';
+import '../models/user_model.dart';
 import 'auth_provider.dart';
 
 // ============================================
@@ -14,104 +15,165 @@ final storageServiceProvider = Provider<StorageService>((ref) {
 });
 
 // ============================================
-// DOCUMENT PROVIDERS
+// DOCUMENT PROVIDERS (Real-time streams)
 // ============================================
 
-/// Employee documents provider - fetches documents for a specific employee.
+/// Employee documents provider - streams documents for a specific employee.
 /// Access control: The calling screen must ensure the current user is authorized
 /// to view this employee's documents (i.e., is the employee themselves,
 /// their immediate supervisor, or a company admin in the same company).
-final employeeDocumentsProvider = FutureProvider.family<List<DocumentModel>, String>(
-  (ref, userId) async {
-    final firestoreService = ref.watch(firestoreServiceProvider);
-    final currentUser = ref.watch(currentUserProvider).value;
-    
-    if (currentUser == null) return [];
-    
-    try {
-      // Enforce visibility: employee can only see their own docs
-      if (currentUser.isEmployee && currentUser.uid != userId) {
-        return [];
-      }
-      
-      // Supervisor can only see documents of their assigned employees
-      if (currentUser.isSupervisor) {
-        final targetUser = await firestoreService.getUser(userId);
-        if (targetUser == null || targetUser.supervisorId != currentUser.uid) {
-          return [];
-        }
-      }
-      
-      // Company admin can only see documents within their own company
-      if (currentUser.isCompanyAdmin) {
-        final targetUser = await firestoreService.getUser(userId);
-        if (targetUser == null || targetUser.companyId != currentUser.companyId) {
-          return [];
-        }
-      }
-      
-      return await firestoreService.getEmployeeDocuments(userId);
-    } catch (e) {
-      print('Error fetching documents: $e');
-      return [];
+final employeeDocumentsProvider =
+    StreamProvider.family<List<DocumentModel>, String>((ref, userId) async* {
+  final firestoreService = ref.watch(firestoreServiceProvider);
+  final currentUser = ref.watch(currentUserProvider).value;
+  
+  if (currentUser == null) {
+    yield [];
+    return;
+  }
+  
+  try {
+    // Enforce visibility: employee can only see their own docs
+    if (currentUser.isEmployee && currentUser.uid != userId) {
+      yield [];
+      return;
     }
-  },
-);
+    
+    // For supervisor/admin, verify access via user document
+    if (currentUser.isSupervisor || currentUser.isCompanyAdmin) {
+      final targetUser = await firestoreService.getUser(userId);
+      if (targetUser == null) {
+        yield [];
+        return;
+      }
+      if (currentUser.isSupervisor &&
+          targetUser.supervisorId != currentUser.uid) {
+        yield [];
+        return;
+      }
+      if (currentUser.isCompanyAdmin &&
+          targetUser.companyId != currentUser.companyId) {
+        yield [];
+        return;
+      }
+    }
+    
+    // Stream the documents
+    yield* firestoreService.streamDocumentsByUser(userId);
+  } catch (e) {
+    print('Error fetching documents stream: $e');
+    yield [];
+  }
+});
 
-/// Current user's own documents provider
-final currentUserDocumentsProvider = FutureProvider<List<DocumentModel>>((ref) async {
+/// Current user's own documents provider (real-time)
+final currentUserDocumentsProvider = StreamProvider<List<DocumentModel>>((ref) async* {
   final userAsync = ref.watch(currentUserProvider);
   final user = userAsync.asData?.value;
-  if (user == null) return [];
+  if (user == null) {
+    yield [];
+    return;
+  }
 
   final firestoreService = ref.watch(firestoreServiceProvider);
   
   try {
-    return await firestoreService.getEmployeeDocuments(user.uid);
+    yield* firestoreService.streamDocumentsByUser(user.uid);
   } catch (e) {
-    print('Error fetching current user documents: $e');
-    return [];
+    print('Error fetching current user documents stream: $e');
+    yield [];
   }
 });
 
 /// Company-scoped documents provider (for company admin web view).
-/// Only returns documents for employees within the admin's company.
-final companyDocumentsProvider = FutureProvider<List<DocumentModel>>((ref) async {
+/// Real-time stream of documents for all employees within the admin's company.
+final companyDocumentsProvider = StreamProvider<List<DocumentModel>>((ref) async* {
   final currentUser = ref.watch(currentUserProvider).value;
-  if (currentUser == null) return [];
+  if (currentUser == null) {
+    yield [];
+    return;
+  }
 
   final firestoreService = ref.watch(firestoreServiceProvider);
 
   try {
     if (currentUser.isSuperAdmin) {
-      // Super admin sees all documents across all companies
-      return await firestoreService.getAllDocuments();
-    } else if (currentUser.isCompanyAdmin) {
-      // Company admin sees only their company's documents
-      return await firestoreService.getAllDocuments(companyId: currentUser.companyId);
+      // Super admin: stream all employees and aggregate their documents
+      yield* _streamAllCompanyDocuments(firestoreService, null);
+    } else if (currentUser.isCompanyAdmin && currentUser.companyId != null) {
+      yield* _streamAllCompanyDocuments(
+        firestoreService,
+        currentUser.companyId,
+      );
     } else {
       // Other roles should not access this provider
-      return [];
+      yield [];
     }
   } catch (e) {
-    print('Error fetching company documents: $e');
-    return [];
+    print('Error fetching company documents stream: $e');
+    yield [];
   }
 });
 
+/// Helper: stream documents for all employees in a company
+Stream<List<DocumentModel>> _streamAllCompanyDocuments(
+  FirestoreService firestoreService,
+  String? companyId,
+) async* {
+  // Stream company employees, then stream their documents
+  Stream<List<UserModel>> employeeStream;
+  if (companyId == null) {
+    employeeStream = firestoreService.streamAllUsers();
+  } else {
+    employeeStream =
+        firestoreService.streamAllUsersForCompany(companyId);
+  }
+
+  await for (final users in employeeStream) {
+    // For each user snapshot, fetch their documents
+    final allDocs = <DocumentModel>[];
+    for (final user in users) {
+      try {
+        // One-shot fetch per employee (acceptable since this is a batch aggregation)
+        final docs = await firestoreService.getEmployeeDocuments(user.uid);
+        allDocs.addAll(docs);
+      } catch (_) {}
+    }
+    allDocs.sort((a, b) => b.uploadedAt.compareTo(a.uploadedAt));
+    yield allDocs;
+  }
+}
+
 /// Supervisor documents provider (for supervisor mobile view).
-/// Only returns documents for employees assigned to this supervisor.
-final supervisorDocumentsProvider = FutureProvider<List<DocumentModel>>((ref) async {
+/// Real-time stream of documents for employees assigned to this supervisor.
+final supervisorDocumentsProvider =
+    StreamProvider<List<DocumentModel>>((ref) async* {
   final currentUser = ref.watch(currentUserProvider).value;
-  if (currentUser == null || !currentUser.isSupervisor) return [];
+  if (currentUser == null || !currentUser.isSupervisor) {
+    yield [];
+    return;
+  }
 
   final firestoreService = ref.watch(firestoreServiceProvider);
 
   try {
-    return await firestoreService.getSupervisorEmployeeDocuments(currentUser.uid);
+    // Stream the list of employees assigned to this supervisor
+    await for (final employees
+        in firestoreService.streamEmployeesBySupervisor(currentUser.uid)) {
+      // Aggregate their documents
+      final allDocs = <DocumentModel>[];
+      for (final emp in employees) {
+        try {
+          final docs = await firestoreService.getEmployeeDocuments(emp.uid);
+          allDocs.addAll(docs);
+        } catch (_) {}
+      }
+      allDocs.sort((a, b) => b.uploadedAt.compareTo(a.uploadedAt));
+      yield allDocs;
+    }
   } catch (e) {
-    print('Error fetching supervisor documents: $e');
-    return [];
+    print('Error fetching supervisor documents stream: $e');
+    yield [];
   }
 });
 

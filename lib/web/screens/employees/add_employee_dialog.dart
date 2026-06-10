@@ -86,9 +86,17 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
   @override
   Widget build(BuildContext context) {
     final projectsAsync = ref.watch(activeProjectsProvider);
+    final currentUser = ref.watch(currentUserProvider).value;
+    final isSupervisor = currentUser != null && currentUser.isSupervisor;
 
     return AlertDialog(
-      title: Text(_isEditMode ? 'Edit User' : 'Add Employee/Supervisor'),
+      title: Text(
+        _isEditMode
+            ? 'Edit User'
+            : (isSupervisor
+                ? 'Add Employee'
+                : 'Add Employee/Supervisor'),
+      ),
       content: SizedBox(
         width: 600,
         child: Form(
@@ -125,30 +133,39 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
                           });
                         },
                       ),
-                      const Divider(height: 1),
-                      RadioListTile<String>(
-                        title: const Text('Supervisor'),
-                        subtitle: const Text('Can manage employees (email/password login)'),
-                        value: 'supervisor',
-                        groupValue: _selectedRole,
-                        onChanged: (value) {
-                          setState(() {
-                            _selectedRole = value!;
-                          });
-                        },
-                      ),
-                      const Divider(height: 1),
-                      RadioListTile<String>(
-                        title: const Text('Admin'),
-                        subtitle: const Text('Full system access'),
-                        value: 'admin',
-                        groupValue: _selectedRole,
-                        onChanged: (value) {
-                          setState(() {
-                            _selectedRole = value!;
-                          });
-                        },
-                      ),
+                      // Hide the Supervisor role option when a supervisor is
+                      // creating the user - supervisors are not allowed to
+                      // create other supervisors.
+                      if (!isSupervisor) ...[
+                        const Divider(height: 1),
+                        RadioListTile<String>(
+                          title: const Text('Supervisor'),
+                          subtitle: const Text('Can manage employees (email/password login)'),
+                          value: 'supervisor',
+                          groupValue: _selectedRole,
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedRole = value!;
+                            });
+                          },
+                        ),
+                      ],
+                      // Hide the Admin role option when a supervisor is creating
+                      // the user - supervisors are not allowed to create admins.
+                      if (!isSupervisor) ...[
+                        const Divider(height: 1),
+                        RadioListTile<String>(
+                          title: const Text('Admin'),
+                          subtitle: const Text('Full system access'),
+                          value: 'admin',
+                          groupValue: _selectedRole,
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedRole = value!;
+                            });
+                          },
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -407,10 +424,14 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
                       ),
                       const SizedBox(height: 8),
                       if (_selectedRole == 'supervisor' || _selectedRole == 'admin')
-                        const Text(
-                          '• Firebase Auth account created (email/password)\n'
-                          '• Can login immediately to web/mobile app\n'
-                          '• Status: Approved automatically',
+                        Text(
+                          currentUser != null && currentUser.isSupervisor
+                              ? '• Firebase Auth account created (email/password)\n'
+                                '• Can login with credentials once approved by company admin\n'
+                                '• Status: Pending (requires admin approval)'
+                              : '• Firebase Auth account created (email/password)\n'
+                                '• Can login immediately to web/mobile app\n'
+                                '• Status: Approved automatically',
                         )
                       else
                         const Text(
@@ -471,9 +492,21 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
           );
         }
 
-        final supervisors = snapshot.data ?? [];
+        // De-duplicate by uid. The Firestore query can return the same
+        // supervisor twice in edge cases (cache + fresh doc, custom-ID
+        // user created more than once, etc.), and Flutter's
+        // DropdownButton asserts that exactly one item matches the
+        // current value - so we collapse duplicates here. We also drop
+        // any entry whose uid is null/empty to keep the items list
+        // safe to render.
+        final uniqueSupervisors = <String, UserModel>{};
+        for (final s in snapshot.data ?? const <UserModel>[]) {
+          if (s.uid.isEmpty) continue;
+          uniqueSupervisors[s.uid] = s;
+        }
+        final uniqueList = uniqueSupervisors.values.toList();
 
-        if (supervisors.isEmpty) {
+        if (uniqueList.isEmpty) {
           return Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -496,8 +529,28 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
           );
         }
 
+        // If the previously selected supervisor is no longer in the
+        // list (e.g. they were deleted, moved to a different company,
+        // or the underlying data was cleaned up), clear the selection
+        // so the dropdown doesn't fail its "exactly one match" assert.
+        final selectedExists = _selectedSupervisorId != null &&
+            uniqueSupervisors.containsKey(_selectedSupervisorId);
+        final validValue = selectedExists ? _selectedSupervisorId : null;
+
+        // If the underlying id is stale, clear it in the next frame so
+        // the form submission uses the corrected value (null) instead
+        // of pointing at a supervisor that no longer exists.
+        if (!selectedExists && _selectedSupervisorId != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() => _selectedSupervisorId = null);
+            }
+          });
+        }
+
         return DropdownButtonFormField<String>(
-          value: _selectedSupervisorId,
+          // ignore: deprecated_member_use
+          value: validValue,
           decoration: const InputDecoration(
             labelText: 'Assign Supervisor',
             border: OutlineInputBorder(),
@@ -509,7 +562,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
               value: null,
               child: Text('No Supervisor'),
             ),
-            ...supervisors.map((supervisor) {
+            ...uniqueList.map((supervisor) {
               return DropdownMenuItem<String>(
                 value: supervisor.uid,
                 child: Text('${supervisor.name} (${supervisor.email})'),
@@ -693,10 +746,10 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
           : null,
       assignedProjectIds: _selectedProjectIds,
       supervisorId: _selectedRole == 'employee' ? _selectedSupervisorId : null, // SA-9
-      status: (_selectedRole == 'supervisor' ||
-                  _selectedRole == 'admin' ||
-                  _selectedRole == 'companyadmin')
-          ? 'approved'
+            status: (_selectedRole == 'supervisor' ||
+            _selectedRole == 'admin' ||
+            _selectedRole == 'companyadmin')
+          ? (currentUser != null && currentUser.isSupervisor ? 'pending' : 'approved')
           : 'pending',
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
