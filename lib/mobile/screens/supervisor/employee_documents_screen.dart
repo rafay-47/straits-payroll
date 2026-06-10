@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:straights_psyroll/shared/models/document_model.dart';
 import 'package:straights_psyroll/shared/models/user_model.dart';
 import 'package:straights_psyroll/shared/providers/auth_provider.dart';
@@ -440,25 +442,47 @@ class _DocumentCard extends StatelessWidget {
         const SnackBar(content: Text('Downloading document...')),
       );
 
-      final uri = Uri.parse(document.url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Download started')),
-          );
-        }
-      } else {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cannot download this document')),
-          );
-        }
+      // Get storage service from provider scope
+      final container = ProviderScope.containerOf(context);
+      final storageService = container.read(storageServiceProvider);
+
+      // Fetch file bytes through Firebase Auth (requires authentication)
+      final bytes = await storageService.downloadFileAsBytes(document.url);
+
+      // Get app documents directory for saving
+      final dir = await getApplicationDocumentsDirectory();
+      final downloadsDir = Directory('${dir.path}/downloads');
+      if (!await downloadsDir.exists()) {
+        await downloadsDir.create(recursive: true);
+      }
+
+      // Save file with original name (prepend timestamp to avoid conflicts)
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final safeName = document.name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+      final filePath = '${downloadsDir.path}/${timestamp}_$safeName';
+      final file = File(filePath);
+      await file.writeAsBytes(bytes);
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Saved to: $filePath'),
+            action: SnackBarAction(
+              label: 'Open',
+              onPressed: () async {
+                final uri = Uri.file(filePath);
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri);
+                }
+              },
+            ),
+          ),
+        );
       }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(content: Text('Download failed: $e')),
         );
       }
     }

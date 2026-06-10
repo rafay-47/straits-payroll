@@ -1,5 +1,7 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
 import '../constants/app_constants.dart';
@@ -144,6 +146,75 @@ class StorageService {
         return 'application/octet-stream';
     }
   }
+
+  // ============================================
+  // FILE DOWNLOAD
+  // ============================================
+
+  /// Download file as bytes from a Firebase Storage URL
+  /// Returns the raw file bytes - requires authenticated access
+  Future<Uint8List> downloadFileAsBytes(String fileUrl) async {
+    try {
+      final ref = _storage.refFromURL(fileUrl);
+      final data = await ref.getData();
+      if (data == null) {
+        throw 'Failed to download file: no data returned';
+      }
+      return data;
+    } catch (e) {
+      throw 'Failed to download file: $e';
+    }
+  }
+
+  /// Get a fresh download URL for a stored file
+  /// This generates a new token-based URL that requires authentication
+  Future<String> getFreshDownloadUrl(String fileUrl) async {
+    try {
+      final ref = _storage.refFromURL(fileUrl);
+      return await ref.getDownloadURL();
+    } catch (e) {
+      throw 'Failed to get download URL: $e';
+    }
+  }
+
+  /// Get a signed download URL with expiration (requires Cloud Function)
+  /// For security: URLs expire after specified duration
+  /// Implementation: Call getSignedDownloadUrl Cloud Function
+  /// 
+  /// Example usage in Cloud Function:
+  /// ```javascript
+  /// const bucket = admin.storage().bucket();
+  /// const [url] = await bucket.file(filePath).getSignedUrl({
+  ///   version: 'v4',
+  ///   action: 'read',
+  ///   expires: Date.now() + 15 * 60 * 1000, // 15 minutes
+  /// });
+  /// ```
+  Future<String> getSignedDownloadUrl({
+    required String filePath,
+    required Duration expiresIn,
+  }) async {
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable('getSignedDownloadUrl');
+      
+      final result = await callable.call({
+        'filePath': filePath,
+        'expirationMinutes': expiresIn.inMinutes,
+      });
+      
+      return result.data['signedUrl'] as String;
+    } catch (e) {
+      debugPrint('Error getting signed URL: $e');
+      // Fallback to regular URL if Cloud Function fails
+      try {
+        final ref = _storage.ref().child(filePath);
+        return await ref.getDownloadURL();
+      } catch (fallbackError) {
+        throw 'Failed to get download URL: $e';
+      }
+    }
+  }
+
 
   // ============================================
   // FILE DELETION

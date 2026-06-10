@@ -8,6 +8,7 @@ import '../../../shared/providers/project_provider.dart';
 import '../../../shared/providers/attendance_provider.dart';
 import 'check_in_screen.dart';
 import 'device_reset_request_screen.dart';
+import 'attendance_history_screen.dart';
 
 /// Employee dashboard screen
 class EmployeeDashboardScreen extends ConsumerStatefulWidget {
@@ -32,6 +33,7 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
     WidgetsBinding.instance.addPostFrameCallback((_) {
       print('🔄 Dashboard: Initial refresh triggered');
       ref.invalidate(todayActiveAttendanceProvider);
+      ref.invalidate(todayAllActiveAttendancesProvider);
       ref.invalidate(employeeProjectsProvider);
       ref.read(attendanceRefreshTriggerProvider.notifier).state++;
       print('   Trigger incremented to: ${ref.read(attendanceRefreshTriggerProvider)}');
@@ -52,6 +54,7 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
       if (mounted) {
         print('🔄 Dashboard: Delayed refresh triggered (500ms after didChangeDependencies)');
         ref.invalidate(todayActiveAttendanceProvider);
+        ref.invalidate(todayAllActiveAttendancesProvider);
         ref.invalidate(employeeProjectsProvider);
         ref.read(attendanceRefreshTriggerProvider.notifier).state++;
         print('   Trigger incremented to: ${ref.read(attendanceRefreshTriggerProvider)}');
@@ -61,6 +64,7 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
           if (mounted) {
             print('🔄 Dashboard: Extra aggressive refresh (1000ms total)');
             ref.invalidate(todayActiveAttendanceProvider);
+            ref.invalidate(todayAllActiveAttendancesProvider);
             ref.read(attendanceRefreshTriggerProvider.notifier).state++;
             print('   Trigger incremented to: ${ref.read(attendanceRefreshTriggerProvider)}');
           }
@@ -81,14 +85,15 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
     
     final user = ref.watch(currentUserProvider);
     final projects = ref.watch(employeeProjectsProvider);
-    final todayAttendance = ref.watch(todayActiveAttendanceProvider);
+    final activeAttendances = ref.watch(todayAllActiveAttendancesProvider);
     
     // Debug log attendance state
-    todayAttendance.whenData((attendance) {
-      if (attendance != null) {
-        print('📊 Dashboard: Attendance data loaded');
-        print('   Status: ${attendance.status}');
-        print('   Check-in: ${attendance.checkInTime}');
+    activeAttendances.whenData((attendanceList) {
+      if (attendanceList.isNotEmpty) {
+        print('📊 Dashboard: ${attendanceList.length} active attendance(s) found');
+        for (var a in attendanceList) {
+          print('   - ${a.projectId}: ${a.status} at ${a.checkInTime}');
+        }
       } else {
         print('📊 Dashboard: No active attendance found');
       }
@@ -116,6 +121,7 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
         onRefresh: () async {
           ref.invalidate(employeeProjectsProvider);
           ref.invalidate(todayActiveAttendanceProvider);
+          ref.invalidate(todayAllActiveAttendancesProvider);
         },
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -210,9 +216,9 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
 
               const SizedBox(height: 12),
 
-              todayAttendance.when(
-                data: (attendance) {
-                  if (attendance == null) {
+              activeAttendances.when(
+                data: (attendanceList) {
+                  if (attendanceList.isEmpty) {
                     return _buildStatusCard(
                       icon: Icons.info_outline,
                       title: 'Not Checked In',
@@ -221,11 +227,16 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
                     );
                   }
 
-                  return _buildStatusCard(
-                    icon: Icons.check_circle,
-                    title: 'Checked In',
-                    subtitle: 'Project: ${attendance.projectId}',
-                    color: AppColors.success,
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildStatusCard(
+                        icon: Icons.check_circle,
+                        title: 'Checked In (${attendanceList.length})',
+                        subtitle: attendanceList.map((a) => a.projectId).join(', '),
+                        color: AppColors.success,
+                      ),
+                    ],
                   );
                 },
                 loading: () => const Card(
@@ -281,11 +292,10 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
                       label: 'Attendance',
                       color: AppColors.info,
                       onTap: () {
-                        // TODO: Navigate to attendance history
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content:
-                                  Text('Attendance history - Coming soon')),
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const AttendanceHistoryScreen(),
+                          ),
                         );
                       },
                     ),

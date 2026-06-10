@@ -195,13 +195,17 @@ class DocumentController extends StateNotifier<DocumentState> {
       );
 
       // Create document metadata in Firestore
+      final fileName = file.path.split('/').last;
+      final filePath = 'companies/$companyId/documents/$userId/$documentType/$fileName';
+      
       final document = DocumentModel(
         documentId: 'doc_${DateTime.now().millisecondsSinceEpoch}',
         companyId: companyId,
         userId: userId,
         type: documentType,
-        name: file.path.split('/').last,
+        name: fileName,
         url: downloadUrl,
+        filePath: filePath,
         fileSizeBytes: file.lengthSync(),
         mimeType: _getMimeType(file),
         uploadedBy: uploadedBy,

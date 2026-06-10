@@ -226,36 +226,36 @@ class NFCService {
 
       // Android: NFC-A tags (NTAG 213, NTAG 215, NTAG 216, MIFARE Ultralight)
       if (data.containsKey('nfca')) {
-        final nfca = data['nfca'] as Map<String, dynamic>?;
+        final nfca = _toMapStringDynamic(data['nfca']);
         if (nfca != null && nfca['identifier'] != null) {
-          final bytes = List<int>.from(nfca['identifier'] as List);
+          final bytes = _toBytes(nfca['identifier']);
           if (bytes.isNotEmpty) return _bytesToHex(bytes);
         }
       }
 
       // Android: MIFARE Ultralight (NTAG 213/215 report as this too)
       if (data.containsKey('mifareultralight')) {
-        final mifare = data['mifareultralight'] as Map<String, dynamic>?;
+        final mifare = _toMapStringDynamic(data['mifareultralight']);
         if (mifare != null && mifare['identifier'] != null) {
-          final bytes = List<int>.from(mifare['identifier'] as List);
+          final bytes = _toBytes(mifare['identifier']);
           if (bytes.isNotEmpty) return _bytesToHex(bytes);
         }
       }
 
       // iOS: MiFare technology (covers NTAG 213/215/216)
       if (data.containsKey('mifare')) {
-        final mifare = data['mifare'] as Map<String, dynamic>?;
+        final mifare = _toMapStringDynamic(data['mifare']);
         if (mifare != null && mifare['identifier'] != null) {
-          final bytes = List<int>.from(mifare['identifier'] as List);
+          final bytes = _toBytes(mifare['identifier']);
           if (bytes.isNotEmpty) return _bytesToHex(bytes);
         }
       }
 
       // iOS: ISO 7816 (some tags expose UID here)
       if (data.containsKey('iso7816')) {
-        final iso7816 = data['iso7816'] as Map<String, dynamic>?;
+        final iso7816 = _toMapStringDynamic(data['iso7816']);
         if (iso7816 != null && iso7816['identifier'] != null) {
-          final bytes = List<int>.from(iso7816['identifier'] as List);
+          final bytes = _toBytes(iso7816['identifier']);
           if (bytes.isNotEmpty) return _bytesToHex(bytes);
         }
       }
@@ -263,8 +263,9 @@ class NFCService {
       // Fallback: try NDEF additional data (works on some devices)
       final ndef = Ndef.from(tag);
       if (ndef != null) {
-        if (ndef.additionalData['identifier'] != null) {
-          final bytes = List<int>.from(ndef.additionalData['identifier'] as List);
+        final additionalData = _toMapStringDynamic(ndef.additionalData);
+        if (additionalData != null && additionalData['identifier'] != null) {
+          final bytes = _toBytes(additionalData['identifier']);
           if (bytes.isNotEmpty) return _bytesToHex(bytes);
         }
       }
@@ -297,6 +298,31 @@ class NFCService {
       print('Error extracting NFC tag UID: $e');
       return null;
     }
+  }
+
+  /// Safely convert a dynamic value to Map<String, dynamic>.
+  /// Handles _Map<Object?, Object?> from Android platform channel.
+  Map<String, dynamic>? _toMapStringDynamic(dynamic value) {
+    if (value == null) return null;
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) {
+      return value.map((key, val) => MapEntry(key.toString(), val));
+    }
+    return null;
+  }
+
+  /// Safely convert a dynamic value to List<int>.
+  List<int> _toBytes(dynamic value) {
+    if (value == null) return [];
+    if (value is List<int>) return value;
+    if (value is List) {
+      try {
+        return value.map((e) => (e as num).toInt()).toList();
+      } catch (_) {
+        return [];
+      }
+    }
+    return [];
   }
 
   /// Check if device supports NFC

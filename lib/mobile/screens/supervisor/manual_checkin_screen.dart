@@ -38,16 +38,10 @@ class _ManualCheckInScreenState extends ConsumerState<ManualCheckInScreen> {
     if (!mounted) return;
 
     final employeesAsync = ref.read(supervisorEmployeesProvider);
-    final projectsAsync = ref.read(activeProjectsProvider);
     final employees = employeesAsync.asData?.value ?? const <UserModel>[];
-    final projects = projectsAsync.asData?.value ?? const <ProjectModel>[];
 
     final selectedEmployee = employees.cast<UserModel?>().firstWhere(
           (e) => e?.uid == _selectedEmployeeId,
-          orElse: () => null,
-        );
-    final selectedProject = projects.cast<ProjectModel?>().firstWhere(
-          (p) => p?.projectId == _selectedProjectId,
           orElse: () => null,
         );
 
@@ -59,7 +53,7 @@ class _ManualCheckInScreenState extends ConsumerState<ManualCheckInScreen> {
       return;
     }
 
-    if (selectedProject == null) {
+    if (_selectedProjectId == null) {
       if (!mounted) return;
       setState(() {
         _errorMessage = 'Please select a project';
@@ -71,6 +65,33 @@ class _ManualCheckInScreenState extends ConsumerState<ManualCheckInScreen> {
       if (!mounted) return;
       setState(() {
         _errorMessage = 'Please enter a reason for manual check-in';
+      });
+      return;
+    }
+
+    // Validate employee is assigned to the selected project
+    ProjectModel? selectedProject;
+    try {
+      final assignedProjects = await ref.read(
+        employeeAssignedProjectsProvider(_selectedEmployeeId!).future,
+      );
+      final isAssigned = assignedProjects.any(
+        (p) => p.projectId == _selectedProjectId,
+      );
+      if (!isAssigned) {
+        if (!mounted) return;
+        setState(() {
+          _errorMessage = 'This employee is not assigned to the selected project';
+        });
+        return;
+      }
+      selectedProject = assignedProjects.firstWhere(
+        (p) => p.projectId == _selectedProjectId,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Failed to verify project assignment: $e';
       });
       return;
     }
@@ -212,7 +233,9 @@ class _ManualCheckInScreenState extends ConsumerState<ManualCheckInScreen> {
   @override
   Widget build(BuildContext context) {
     final employees = ref.watch(supervisorEmployeesProvider);
-    final projects = ref.watch(activeProjectsProvider);
+    final employeeProjects = _selectedEmployeeId != null
+        ? ref.watch(employeeAssignedProjectsProvider(_selectedEmployeeId!))
+        : null;
 
     return Scaffold(
       appBar: AppBar(
@@ -311,8 +334,13 @@ class _ManualCheckInScreenState extends ConsumerState<ManualCheckInScreen> {
                       onChanged: (employeeId) {
                         setState(() {
                           _selectedEmployeeId = employeeId;
+                          _selectedProjectId = null;
                           _errorMessage = null;
                         });
+                        // Invalidate cached provider to force fresh fetch for new employee
+                        if (employeeId != null) {
+                          ref.invalidate(employeeAssignedProjectsProvider(employeeId));
+                        }
                       },
                     ),
                   ),
@@ -341,54 +369,77 @@ class _ManualCheckInScreenState extends ConsumerState<ManualCheckInScreen> {
 
             const SizedBox(height: 12),
 
-            projects.when(
-              data: (projectList) {
-                if (projectList.isEmpty) {
+            if (_selectedEmployeeId == null)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    'Please select an employee first',
+                    style: TextStyle(color: AppColors.textSecondary),
+                  ),
+                ),
+              )
+            else
+              employeeProjects!.when(
+                data: (projectList) {
+                  if (projectList.isEmpty) {
+                    return Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                          'No projects assigned to this employee',
+                          style: TextStyle(color: AppColors.textSecondary),
+                        ),
+                      ),
+                    );
+                  }
+
+                  // Validate that selected project is still in the list
+                  if (_selectedProjectId != null &&
+                      !projectList.any((p) => p.projectId == _selectedProjectId)) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) {
+                        setState(() {
+                          _selectedProjectId = null;
+                        });
+                      }
+                    });
+                  }
+
                   return Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
-                      child: Text(
-                        'No projects available',
-                        style: TextStyle(color: AppColors.textSecondary),
+                      child: DropdownButtonFormField<String>(
+                        value: _selectedProjectId,
+                        decoration: const InputDecoration(
+                          labelText: 'Project',
+                          prefixIcon: Icon(Icons.folder),
+                          border: OutlineInputBorder(),
+                        ),
+                        items: projectList.map((project) {
+                          return DropdownMenuItem<String>(
+                            value: project.projectId,
+                            child: Text(project.name),
+                          );
+                        }).toList(),
+                        onChanged: (projectId) {
+                          setState(() {
+                            _selectedProjectId = projectId;
+                            _errorMessage = null;
+                          });
+                        },
                       ),
                     ),
                   );
-                }
-
-                return Card(
+                },
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (error, stack) => Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
-                    child: DropdownButtonFormField<String>(
-                      value: _selectedProjectId,
-                      decoration: const InputDecoration(
-                        labelText: 'Project',
-                        prefixIcon: Icon(Icons.folder),
-                        border: OutlineInputBorder(),
-                      ),
-                      items: projectList.map((project) {
-                        return DropdownMenuItem<String>(
-                          value: project.projectId,
-                          child: Text(project.name),
-                        );
-                      }).toList(),
-                      onChanged: (projectId) {
-                        setState(() {
-                          _selectedProjectId = projectId;
-                          _errorMessage = null;
-                        });
-                      },
-                    ),
+                    child: Text('Error loading projects: $error'),
                   ),
-                );
-              },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, stack) => Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text('Error loading projects: $error'),
                 ),
               ),
-            ),
 
             const SizedBox(height: 24),
 

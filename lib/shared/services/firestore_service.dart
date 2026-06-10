@@ -141,13 +141,29 @@ class FirestoreService {
             .get();
 
         for (final doc in supervisedProjects.docs) {
+          final projectUpdates = <String, dynamic>{
+            'updatedAt': DateTime.now().toIso8601String(),
+          };
+          if (replacementSupervisorId != null) {
+            projectUpdates['supervisorId'] = replacementSupervisorId;
+          } else {
+            projectUpdates['supervisorId'] = null;
+          }
           await _firestore
               .collection(AppConstants.projectsCollection)
               .doc(doc.id)
-              .update({
-            'supervisorId': replacementSupervisorId,
-            'updatedAt': DateTime.now().toIso8601String(),
-          });
+              .update(projectUpdates);
+
+          // Also add project to replacement supervisor's assignedProjectIds
+          if (replacementSupervisorId != null) {
+            await _firestore
+                .collection(AppConstants.usersCollection)
+                .doc(replacementSupervisorId)
+                .update({
+              'assignedProjectIds': FieldValue.arrayUnion([doc.id]),
+              'updatedAt': DateTime.now().toIso8601String(),
+            }).catchError((_) {});
+          }
         }
 
         final supervisedEmployees = await _firestore
@@ -1137,6 +1153,29 @@ class FirestoreService {
     }
   }
 
+  /// Get projects assigned to supervisor (by project.supervisorId field)
+  /// This matches how the web dashboard queries supervisor projects.
+  Future<List<ProjectModel>> getSupervisorProjects(String supervisorId) async {
+    try {
+      final snapshot = await _firestore
+          .collection(AppConstants.projectsCollection)
+          .where('supervisorId', isEqualTo: supervisorId)
+          .get();
+
+      final projects = <ProjectModel>[];
+      for (final doc in snapshot.docs) {
+        final project = ProjectModel.fromMap(doc.data());
+        if (project.isActive) {
+          projects.add(project);
+        }
+      }
+      return projects;
+    } catch (e) {
+      print('Error fetching supervisor projects: $e');
+      throw 'Failed to get supervisor projects: $e';
+    }
+  }
+
   /// Get projects assigned to employee
   /// Uses assignment-based lookup to support legacy/new companyId formats.
   Future<List<ProjectModel>> getEmployeeProjects(String employeeId) async {
@@ -1509,7 +1548,7 @@ class FirestoreService {
           .where('checkInTime', isLessThanOrEqualTo: endOfDayStr)
           // Removed status filter to avoid index requirement
           .orderBy('checkInTime', descending: true)
-          .get(const GetOptions(source: Source.server)); // Force server fetch
+          .get();
 
       print('📊 Query returned ${snapshot.docs.length} documents from SERVER');
 
@@ -1557,6 +1596,42 @@ class FirestoreService {
       print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       print('');
       throw 'Failed to get today\'s attendance: $e';
+    }
+  }
+
+  /// Get all of today's active (checked_in) attendances for a user (multi-project support)
+  Future<List<AttendanceModel>> getTodayAllActiveAttendances(String userId) async {
+    try {
+      final now = DateTime.now();
+      final startOfDay = DateTime(now.year, now.month, now.day);
+      final endOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59);
+      
+      final startOfDayStr = startOfDay.toIso8601String();
+      final endOfDayStr = endOfDay.toIso8601String();
+
+      // SIMPLIFIED QUERY - No index required!
+      final snapshot = await _firestore
+          .collection(AppConstants.usersCollection)
+          .doc(userId)
+          .collection(AppConstants.attendanceSubcollection)
+          .where('checkInTime', isGreaterThanOrEqualTo: startOfDayStr)
+          .where('checkInTime', isLessThanOrEqualTo: endOfDayStr)
+          .orderBy('checkInTime', descending: true)
+          .get();
+
+      // Filter in memory for status = 'checked_in'
+      final activeAttendances = <AttendanceModel>[];
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final status = data['status'] as String?;
+        if (status == AppConstants.attendanceStatusCheckedIn) {
+          activeAttendances.add(AttendanceModel.fromMap(data));
+        }
+      }
+
+      return activeAttendances;
+    } catch (e) {
+      throw 'Failed to get today\'s active attendances: $e';
     }
   }
 

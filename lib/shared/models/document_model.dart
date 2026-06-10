@@ -8,6 +8,7 @@ class DocumentModel {
   final String type; // 'id_proof', 'bank_statement', 'contract', 'other'
   final String name; // File name
   final String url; // Firebase Storage URL
+  final String? filePath; // Storage path for signed URL generation (e.g., 'companies/{companyId}/documents/{userId}/{type}/{fileName}')
   final int? fileSizeBytes;
   final String? mimeType;
   final String uploadedBy; // Supervisor/Admin user ID
@@ -22,6 +23,7 @@ class DocumentModel {
     required this.type,
     required this.name,
     required this.url,
+    this.filePath,
     this.fileSizeBytes,
     this.mimeType,
     required this.uploadedBy,
@@ -70,6 +72,7 @@ class DocumentModel {
       'type': type,
       'name': name,
       'url': url,
+      'filePath': filePath,
       'fileSizeBytes': fileSizeBytes,
       'mimeType': mimeType,
       'uploadedBy': uploadedBy,
@@ -88,6 +91,7 @@ class DocumentModel {
       type: map['type'] as String,
       name: map['name'] as String,
       url: map['url'] as String,
+      filePath: map['filePath'] as String?,
       fileSizeBytes: map['fileSizeBytes'] as int?,
       mimeType: map['mimeType'] as String?,
       uploadedBy: map['uploadedBy'] as String,
@@ -105,6 +109,7 @@ class DocumentModel {
     String? type,
     String? name,
     String? url,
+    String? filePath,
     int? fileSizeBytes,
     String? mimeType,
     String? uploadedBy,
@@ -119,6 +124,7 @@ class DocumentModel {
       type: type ?? this.type,
       name: name ?? this.name,
       url: url ?? this.url,
+      filePath: filePath ?? this.filePath,
       fileSizeBytes: fileSizeBytes ?? this.fileSizeBytes,
       mimeType: mimeType ?? this.mimeType,
       uploadedBy: uploadedBy ?? this.uploadedBy,

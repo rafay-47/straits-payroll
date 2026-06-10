@@ -5,6 +5,7 @@ import '../../../shared/constants/app_colors.dart';
 import '../../../shared/constants/app_strings.dart';
 import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/project_model.dart';
+import '../../../shared/models/attendance_model.dart';
 import '../../../shared/providers/auth_provider.dart';
 import '../../../shared/providers/project_provider.dart';
 import '../../../shared/providers/attendance_provider.dart';
@@ -47,7 +48,7 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
   @override
   Widget build(BuildContext context) {
     final projects = ref.watch(employeeProjectsProvider);
-    final todayAttendance = ref.watch(todayActiveAttendanceProvider);
+    final activeAttendances = ref.watch(todayAllActiveAttendancesProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -59,21 +60,27 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Current Status
-            todayAttendance.when(
-              data: (attendance) {
-                if (attendance != null) {
-                  return _buildStatusCard(
-                    icon: Icons.check_circle,
-                    title: 'Currently Checked In',
-                    subtitle: 'Project: ${attendance.projectId}',
-                    trailing: ElevatedButton(
-                      onPressed: () => _handleCheckOut(attendance.attendanceId),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.error,
+            // Current Status - show all active attendances
+            activeAttendances.when(
+              data: (attendanceList) {
+                if (attendanceList.isNotEmpty) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Active Check-ins (${attendanceList.length})',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
                       ),
-                      child: const Text('Check Out'),
-                    ),
+                      const SizedBox(height: 8),
+                      ...attendanceList.map((attendance) => Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: _buildActiveAttendanceCard(attendance),
+                          )),
+                    ],
                   );
                 }
 
@@ -375,6 +382,72 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
               ),
             ),
             if (trailing != null) trailing,
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActiveAttendanceCard(AttendanceModel attendance) {
+    final checkInTime = attendance.checkInTime;
+    final timeStr = '${checkInTime.hour.toString().padLeft(2, '0')}:${checkInTime.minute.toString().padLeft(2, '0')}';
+    
+    // Try to find project name
+    String projectName = attendance.projectId;
+    final projects = ref.read(employeeProjectsProvider);
+    projects.whenData((projectList) {
+      final match = projectList.where((p) => p.projectId == attendance.projectId);
+      if (match.isNotEmpty) {
+        projectName = match.first.name;
+      }
+    });
+
+    return Card(
+      color: AppColors.success.withOpacity(0.05),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.success.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.check_circle, color: AppColors.success, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    projectName,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Checked in at $timeStr',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => _handleCheckOut(attendance.attendanceId),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.error,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              ),
+              child: const Text('Check Out', style: TextStyle(fontSize: 12)),
+            ),
           ],
         ),
       ),
@@ -920,36 +993,24 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
     }
     print('✅ User: ${user.uid}');
 
-    // Get the current attendance to find the project
-    final todayAttendance = ref.read(todayActiveAttendanceProvider);
-    print('📊 Today attendance provider state: ${todayAttendance.runtimeType}');
-    print('   Has value: ${todayAttendance.hasValue}');
+    // Get all active attendances to find the specific one
+    final allActiveAttendances = ref.read(todayAllActiveAttendancesProvider);
+    final attendanceList = allActiveAttendances.value ?? [];
     
-    final attendance = todayAttendance.value;
+    final attendance = attendanceList.where((a) => a.attendanceId == attendanceId).firstOrNull;
     if (attendance == null) {
-      print('❌ No active attendance found in provider');
+      print('❌ No active attendance found for ID: $attendanceId');
       setState(() {
         _errorMessage = 'No active check-in found';
       });
       return;
     }
     
-    print('✅ Attendance found in provider:');
+    print('✅ Attendance found:');
     print('   Attendance ID: ${attendance.attendanceId}');
     print('   Project ID: ${attendance.projectId}');
     print('   Check-in time: ${attendance.checkInTime}');
     print('   Status: ${attendance.status}');
-    
-    // CRITICAL: Verify we're checking out the correct attendance
-    if (attendance.attendanceId != attendanceId) {
-      print('⚠️ WARNING: Attendance ID mismatch!');
-      print('   Button passed: $attendanceId');
-      print('   Provider has: ${attendance.attendanceId}');
-      print('   Using provider attendance ID to ensure we checkout the latest one');
-    }
-    
-    // Use the attendance ID from the provider (most recent one) instead of the button parameter
-    final correctAttendanceId = attendance.attendanceId;
 
     // Get project details to check which check-out methods are required
     final projects = ref.read(employeeProjectsProvider);
@@ -1061,11 +1122,11 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
 
       // Perform check-out with method
       print('🔄 Calling attendanceController.checkOut()...');
-      print('   Attendance ID to update: $correctAttendanceId');
+      print('   Attendance ID to update: $attendanceId');
       
       final success = await ref.read(attendanceControllerProvider.notifier).checkOut(
             userId: user.uid,
-            attendanceId: correctAttendanceId, // Use the correct ID
+            attendanceId: attendanceId,
             checkOutMethod: checkOutMethod,
             notes: validationNote,
           );
@@ -1074,14 +1135,17 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
         print('✅ Check-out successful!');
         print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         
-        await Future.delayed(const Duration(milliseconds: 800));
-        
-        _showSuccessDialog('Check-out Successful',
-            'Your working hours have been recorded');
-        
+        // Invalidate providers immediately
         ref.invalidate(todayActiveAttendanceProvider);
+        ref.invalidate(todayAllActiveAttendancesProvider);
         ref.read(attendanceRefreshTriggerProvider.notifier).state++;
-        print('   Trigger incremented for dashboard refresh');
+        
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        if (mounted) {
+          _showSuccessDialog('Check-out Successful',
+              'Your working hours have been recorded');
+        }
       } else {
         print('❌ Check-out failed: success=$success, mounted=$mounted');
       }
@@ -1192,18 +1256,18 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
               Navigator.of(dialogContext).pop();
               await Future.delayed(const Duration(milliseconds: 200));
               
+              if (!mounted) return;
+              
+              // Invalidate providers BEFORE popping the screen
               ref.invalidate(todayActiveAttendanceProvider);
+              ref.invalidate(todayAllActiveAttendancesProvider);
+              ref.invalidate(currentUserProvider);
               ref.read(attendanceRefreshTriggerProvider.notifier).state++;
               await Future.delayed(const Duration(milliseconds: 800));
               
               if (mounted) {
                 widgetNavigator.pop();
-                await Future.delayed(const Duration(milliseconds: 500));
               }
-              
-              ref.invalidate(todayActiveAttendanceProvider);
-              ref.invalidate(currentUserProvider);
-              ref.read(attendanceRefreshTriggerProvider.notifier).state++;
             },
             child: const Text('OK'),
           ),

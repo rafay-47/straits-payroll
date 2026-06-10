@@ -48,7 +48,7 @@ final employeeProjectsProvider = FutureProvider<List<ProjectModel>>((ref) async 
   }
 });
 
-/// Supervisor's assigned projects provider
+/// Supervisor's assigned projects provider (queries projects by supervisorId - matches web dashboard)
 final supervisorProjectsProvider = FutureProvider<List<ProjectModel>>((ref) async {
   final userAsync = ref.watch(currentUserProvider);
   final user = userAsync.asData?.value;
@@ -57,19 +57,7 @@ final supervisorProjectsProvider = FutureProvider<List<ProjectModel>>((ref) asyn
   final firestoreService = ref.watch(firestoreServiceProvider);
   
   try {
-    final assignedIds = user.assignedProjectIds.isNotEmpty
-        ? user.assignedProjectIds
-        : (user.assignedProjectId != null ? [user.assignedProjectId!] : <String>[]);
-    if (assignedIds.isEmpty) return [];
-
-    final projects = <ProjectModel>[];
-    for (final projectId in assignedIds) {
-      final project = await firestoreService.getProject(projectId);
-      if (project != null) {
-        projects.add(project);
-      }
-    }
-    return projects;
+    return await firestoreService.getSupervisorProjects(user.uid);
   } catch (e) {
     print('Error fetching supervisor projects: $e');
     return [];
@@ -91,6 +79,19 @@ final projectProvider = FutureProvider.family<ProjectModel?, String>((ref, proje
   } catch (e) {
     print('Error fetching project: $e');
     return null;
+  }
+});
+
+/// Projects assigned to a specific employee (used by supervisor manual check-in)
+final employeeAssignedProjectsProvider =
+    FutureProvider.family<List<ProjectModel>, String>((ref, employeeId) async {
+  final firestoreService = ref.watch(firestoreServiceProvider);
+  
+  try {
+    return await firestoreService.getEmployeeProjects(employeeId);
+  } catch (e) {
+    print('Error fetching employee projects for $employeeId: $e');
+    return [];
   }
 });
 

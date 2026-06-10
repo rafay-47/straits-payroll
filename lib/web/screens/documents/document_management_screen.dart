@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:straights_psyroll/shared/models/document_model.dart';
@@ -433,30 +435,181 @@ class _DocumentManagementScreenState
       BuildContext context, DocumentModel document) async {
     try {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Downloading document...')),
+        const SnackBar(content: Text('Preparing download...')),
       );
 
-      final uri = Uri.parse(document.url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Download started')),
-          );
+      print('📥 Downloading document: ${document.name}');
+      print('🔗 URL: ${document.url}');
+
+      // Try modern Fetch API first
+      try {
+        final response = await html.window.fetch(
+          document.url,
+          {'mode': 'cors', 'credentials': 'omit'} as dynamic,
+        );
+
+        if (!response.ok) {
+          print('❌ Fetch failed with status: ${response.status}');
+          throw 'HTTP ${response.status}: ${response.statusText}';
         }
-      } else {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cannot download this document')),
-          );
+
+        final blob = await response.blob();
+        _triggerDownloadFromBlob(context, blob, document.name);
+      } catch (fetchError) {
+        print('⚠️ Fetch API error: $fetchError');
+        // Fallback: Try XMLHttpRequest (handles CORS better in some cases)
+        print('🔄 Trying XMLHttpRequest fallback...');
+        try {
+          await _downloadViaXHR(document.url, document.name);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('${document.name} downloading...'),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+        } catch (xhrError) {
+          print('⚠️ XHR error: $xhrError');
+          // Final fallback: Open in new tab (allows user to right-click and save)
+          print('🔄 Opening document in new tab...');
+          html.window.open(document.url, '_blank');
+
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Opening ${document.name} in new tab\n(Right-click → Save As to download)'),
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
         }
       }
     } catch (e) {
+      print('❌ Download error: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(
+            content: Text('Download failed: $e'),
+            duration: const Duration(seconds: 4),
+          ),
         );
       }
+    }
+  }
+
+  Future<void> _downloadViaXHR(String url, String fileName) async {
+    final completer = Completer<void>();
+    
+    final xhr = html.HttpRequest();
+    
+    xhr.open('GET', url);
+    xhr.responseType = 'blob';
+    
+    // Handle response
+    xhr.onLoad.listen((_) {
+      try {
+        if (xhr.status == 200) {
+          final blob = xhr.response as html.Blob;
+          print('✅ XHR fetch successful, blob size: ${blob.size}');
+          
+          // Create blob URL and download
+          final blobUrl = html.Url.createObjectUrlFromBlob(blob);
+          _triggerDirectDownload(blobUrl, fileName);
+          
+          // Clean up
+          Future.delayed(const Duration(milliseconds: 500), () {
+            try {
+              html.Url.revokeObjectUrl(blobUrl);
+            } catch (e) {
+              print('Warning: Could not revoke blob URL: $e');
+            }
+          });
+          
+          completer.complete();
+        } else {
+          completer.completeError('XHR failed with status: ${xhr.status}');
+        }
+      } catch (e) {
+        completer.completeError('XHR response error: $e');
+      }
+    });
+    
+    xhr.onError.listen((_) {
+      print('❌ XHR error event');
+      completer.completeError('XHR request failed');
+    });
+    
+    xhr.onAbort.listen((_) {
+      print('⚠️ XHR aborted');
+      completer.completeError('XHR request aborted');
+    });
+    
+    try {
+      xhr.send();
+    } catch (e) {
+      completer.completeError('XHR send error: $e');
+    }
+    
+    return completer.future;
+  }
+
+  void _triggerDownloadFromBlob(
+      BuildContext context, html.Blob blob, String fileName) {
+    try {
+      // Create blob URL and trigger download
+      final blobUrl = html.Url.createObjectUrlFromBlob(blob);
+      _triggerDirectDownload(blobUrl, fileName);
+
+      // Clean up blob URL after download starts
+      Future.delayed(const Duration(milliseconds: 500), () {
+        html.Url.revokeObjectUrl(blobUrl);
+      });
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$fileName downloaded'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Blob download error: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Blob download failed: $e')),
+        );
+      }
+    }
+  }
+
+  void _triggerDirectDownload(String url, String fileName) {
+    try {
+      print('📥 Triggering download: $fileName');
+      
+      final anchorElement = html.AnchorElement(href: url)
+        ..setAttribute('download', fileName)
+        ..style.display = 'none';
+
+      html.document.body!.append(anchorElement);
+      
+      // Click to trigger download
+      anchorElement.click();
+
+      // Remove element after click
+      Future.delayed(const Duration(milliseconds: 100), () {
+        try {
+          anchorElement.remove();
+        } catch (e) {
+          print('Warning: Could not remove anchor element: $e');
+        }
+      });
+      
+      print('✅ Download triggered for: $fileName');
+    } catch (e) {
+      print('❌ Direct download error: $e');
+      throw 'Failed to trigger download: $e';
     }
   }
 

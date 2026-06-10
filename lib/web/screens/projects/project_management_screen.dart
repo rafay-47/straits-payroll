@@ -959,7 +959,9 @@ class _AddEditProjectDialogState extends ConsumerState<AddEditProjectDialog> {
             {
               'assignedProjectIds': FieldValue.arrayRemove([projectId]),
             },
-          );
+          ).catchError((e) {
+            print('⚠️ Could not update old supervisor (may be deleted): $e');
+          });
         }
         
         // Assign project to new supervisor

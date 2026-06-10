@@ -47,6 +47,24 @@ final todayActiveAttendanceProvider = FutureProvider<AttendanceModel?>((ref) asy
   }
 });
 
+/// Today's ALL active attendances provider (supports multi-project check-in)
+final todayAllActiveAttendancesProvider = FutureProvider<List<AttendanceModel>>((ref) async {
+  final trigger = ref.watch(attendanceRefreshTriggerProvider);
+  
+  final userAsync = ref.watch(currentUserProvider);
+  final user = userAsync.asData?.value;
+  if (user == null) return [];
+
+  final firestoreService = ref.watch(firestoreServiceProvider);
+  
+  try {
+    return await firestoreService.getTodayAllActiveAttendances(user.uid);
+  } catch (e) {
+    print('Error fetching today active attendances: $e');
+    return [];
+  }
+});
+
 /// Attendance history provider
 final attendanceHistoryProvider = FutureProvider<List<AttendanceModel>>((ref) async {
   final userAsync = ref.watch(currentUserProvider);
@@ -148,38 +166,8 @@ class AttendanceController extends StateNotifier<AttendanceState> {
       print('Project ID: $projectId');
       print('Method: $checkInMethod');
       
-      // CRITICAL FIX: Auto-checkout any existing checked-in records first
-      print('🔍 Checking for existing active check-ins...');
-      final existingAttendance = await _firestoreService.getTodayActiveAttendance(userId);
-      
-      if (existingAttendance != null && existingAttendance.status == 'checked_in') {
-        print('⚠️ Found existing checked-in record: ${existingAttendance.attendanceId}');
-        print('   Auto-checking out old record before new check-in...');
-        
-        // Auto-checkout the old record
-        final now = DateTime.now();
-        final autoCheckoutUpdates = {
-          'checkOutTime': now.toIso8601String(),
-          'status': 'checked_out',
-          'checkOutMethod': 'auto',
-          'notes': (existingAttendance.notes ?? '') + 
-                   ' | Auto checked-out at ${now.toIso8601String()} (new session started)',
-          'workingHours': now.difference(existingAttendance.checkInTime).inMinutes / 60.0,
-        };
-        
-        try {
-          await _firestoreService.updateAttendance(
-            userId: userId,
-            attendanceId: existingAttendance.attendanceId,
-            updates: autoCheckoutUpdates,
-          );
-          print('✅ Old record auto-checked-out successfully');
-        } catch (e) {
-          print('⚠️ Auto-checkout of old record failed (non-blocking): $e');
-        }
-      } else {
-        print('✅ No existing active check-ins found - proceeding with new check-in');
-      }
+      // NOTE: Auto-checkout removed to support multi-project check-in.
+      // Employees can now be checked in to multiple projects simultaneously.
       print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       
       // Get current location (required for GPS, best-effort for other methods)
@@ -243,6 +231,7 @@ class AttendanceController extends StateNotifier<AttendanceState> {
 
       // Refresh providers - invalidate triggers rebuild
       _ref.invalidate(todayActiveAttendanceProvider);
+      _ref.invalidate(todayAllActiveAttendancesProvider);
       _ref.invalidate(attendanceHistoryProvider);
 
       return true;
@@ -341,6 +330,7 @@ class AttendanceController extends StateNotifier<AttendanceState> {
 
       // Refresh providers
       _ref.invalidate(todayActiveAttendanceProvider);
+      _ref.invalidate(todayAllActiveAttendancesProvider);
       _ref.invalidate(attendanceHistoryProvider);
 
       return true;
