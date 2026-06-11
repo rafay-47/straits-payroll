@@ -4,6 +4,7 @@
 // Stub classes for dart:html that don't exist on native platforms
 class Blob {
   int size = 0;
+  Blob([dynamic parts, dynamic type]);
 }
 
 class Url {

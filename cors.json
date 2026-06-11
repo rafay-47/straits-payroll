@@ -1,0 +1,23 @@
+[
+  {
+    "origin": [
+      "http://localhost:*",
+      "http://127.0.0.1:*",
+      "https://straights-payroll.firebaseapp.com",
+      "https://straights-payroll.web.app"
+    ],
+    "method": [
+      "GET",
+      "HEAD",
+      "DELETE"
+    ],
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "Content-Disposition",
+      "Access-Control-Allow-Origin",
+      "Access-Control-Allow-Methods"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

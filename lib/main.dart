@@ -33,25 +33,15 @@ Future<void> _bootstrapApp() async {
     print('✅ Firebase initialized successfully');
 
     // Configure Firestore settings for real-time sync
-    // In cloud_firestore 6.x, persistence is enabled by default.
-    // We just ensure settings are configured before any other Firestore operations.
+    // In cloud_firestore 6.x, persistence is enabled by default on all platforms.
+    // On web, only cacheSizeBytes is configurable — persistenceEnabled is not supported
+    // and setting it can silently break initialization.
     try {
       final firestore = FirebaseFirestore.instance;
-      if (kIsWeb) {
-        // Configure web persistence with multi-tab synchronization
-        firestore.settings = const Settings(
-          persistenceEnabled: true,
-          cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
-        );
-        print('✅ Firestore web persistence configured (multi-tab)');
-      } else {
-        // Mobile: persistence is on by default
-        firestore.settings = const Settings(
-          persistenceEnabled: true,
-          cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
-        );
-        print('✅ Firestore mobile persistence configured');
-      }
+      firestore.settings = const Settings(
+        cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+      );
+      print('✅ Firestore settings configured');
     } catch (e) {
       // Settings can only be set before any other usage of Firestore
       print('⚠️ Firestore settings already configured: $e');
