@@ -462,9 +462,9 @@ import 'package:straights_psyroll/shared/constants/app_colors.dart';
       // Parse Firebase Storage URL to get object path
       // URL format: https://firebasestorage.googleapis.com/v0/b/BUCKET/o/PATH?alt=media&token=TOKEN
       final uri = Uri.parse(url);
-      final pathMatch = uri.path.match(RegExp(r'^/v0/b/[^/]+/o/(.+)$'));
-      if (pathMatch != null) {
-        return Uri.decodeComponent(pathMatch[1]!);
+      final match = RegExp(r'^/v0/b/[^/]+/o/(.+)$').firstMatch(uri.path);
+      if (match != null) {
+        return Uri.decodeComponent(match.group(1)!);
       }
       // Fallback: if already a storage path
       return url;
