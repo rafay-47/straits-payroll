@@ -1,12 +1,14 @@
-  import 'dart:async';
-  import 'html_stub.dart' if (dart.library.html) 'dart:html' as html;
-  import 'package:flutter/material.dart';
-  import 'package:flutter_riverpod/flutter_riverpod.dart';
-  import 'package:straights_psyroll/shared/models/document_model.dart';
-  import 'package:straights_psyroll/shared/models/user_model.dart';
-  import 'package:straights_psyroll/shared/providers/auth_provider.dart';
-  import 'package:straights_psyroll/shared/providers/document_provider.dart';
-  import 'package:straights_psyroll/shared/constants/app_colors.dart';
+import 'dart:async';
+import 'html_stub.dart' if (dart.library.html) 'dart:html' as html;
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
+import 'package:straights_psyroll/shared/models/document_model.dart';
+import 'package:straights_psyroll/shared/models/user_model.dart';
+import 'package:straights_psyroll/shared/providers/auth_provider.dart';
+import 'package:straights_psyroll/shared/providers/document_provider.dart';
+import 'package:straights_psyroll/shared/constants/app_colors.dart';
 
   /// Web Admin Screen for Document Management
   class DocumentManagementScreen extends ConsumerStatefulWidget {
@@ -399,22 +401,56 @@
           const SnackBar(content: Text('Preparing download...')),
         );
 
-        // XHR is used because fetch() fails with CORS on this bucket.
-        // The Firebase URL stays inside the XHR — it is never shown in
-        // the address bar or exposed to the user.
-        final blob = await _fetchDocumentViaXHR(document.url);
+        // Extract storage path from Firebase Storage URL
+        final storagePath = _extractStoragePath(document.url);
+        
+        // Get current user's ID token
+        final user = FirebaseAuth.instance.currentUser;
+        if (user == null) throw Exception('Not authenticated');
+        final idToken = await user.getIdToken(true);
 
-        if (!context.mounted) return;
+        // Call Cloud Function streaming endpoint
+        final functionUrl = 'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/downloadDocumentStream';
+        final uri = Uri.parse('$functionUrl?storagePath=${Uri.encodeComponent(storagePath)}');
 
-        _triggerDownloadFromBlob(context, blob, document.name);
+        final response = await http.get(uri, headers: {
+          'Authorization': 'Bearer $idToken',
+        });
+
+        if (response.statusCode != 200) {
+          throw Exception('Download failed: ${response.statusCode} - ${response.body}');
+        }
+
+        // Trigger browser download from bytes
+        final blob = html.Blob([response.bodyBytes]);
+        final blobUrl = html.Url.createObjectUrlFromBlob(blob);
+        
+        final anchorElement = html.AnchorElement(href: blobUrl)
+          ..setAttribute('download', document.name)
+          ..style.display = 'none';
+
+        html.document.body!.append(anchorElement);
+        anchorElement.click();
+
+        Future.delayed(const Duration(milliseconds: 500), () {
+          html.Url.revokeObjectUrl(blobUrl);
+          try { anchorElement.remove(); } catch (_) {}
+        });
+
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${document.name} downloaded'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
       } catch (e) {
         print('❌ Download error: $e');
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text(
-                'Download failed. Please contact your administrator.',
-              ),
+              content: Text('Download failed: $e'),
               duration: const Duration(seconds: 4),
             ),
           );
@@ -422,93 +458,16 @@
       }
     }
 
-    /// Fetch document bytes via XMLHttpRequest.
-    /// Returns a Blob ready for client-side download.
-    /// The Firebase Storage URL is never exposed to the user.
-    Future<html.Blob> _fetchDocumentViaXHR(String url) {
-      final completer = Completer<html.Blob>();
-
-      final xhr = html.HttpRequest();
-      xhr.open('GET', url);
-      xhr.responseType = 'blob';
-
-      xhr.onLoad.listen((_) {
-        if (xhr.status == 200) {
-          completer.complete(xhr.response as html.Blob);
-        } else {
-          completer.completeError('Server responded with status ${xhr.status}');
-        }
-      });
-
-      xhr.onError.listen((_) {
-        completer.completeError('Network request failed');
-      });
-
-      xhr.onAbort.listen((_) {
-        completer.completeError('Request was aborted');
-      });
-
-      xhr.send();
-      return completer.future;
-    }
-
-    void _triggerDownloadFromBlob(
-        BuildContext context, html.Blob blob, String fileName) {
-      try {
-        // Create blob URL and trigger download
-        final blobUrl = html.Url.createObjectUrlFromBlob(blob);
-        _triggerDirectDownload(blobUrl, fileName);
-
-        // Clean up blob URL after download starts
-        Future.delayed(const Duration(milliseconds: 500), () {
-          html.Url.revokeObjectUrl(blobUrl);
-        });
-
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('$fileName downloaded'),
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      } catch (e) {
-        print('❌ Blob download error: $e');
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Blob download failed: $e')),
-          );
-        }
+    String _extractStoragePath(String url) {
+      // Parse Firebase Storage URL to get object path
+      // URL format: https://firebasestorage.googleapis.com/v0/b/BUCKET/o/PATH?alt=media&token=TOKEN
+      final uri = Uri.parse(url);
+      final pathMatch = uri.path.match(RegExp(r'^/v0/b/[^/]+/o/(.+)$'));
+      if (pathMatch != null) {
+        return Uri.decodeComponent(pathMatch[1]!);
       }
-    }
-
-    void _triggerDirectDownload(String url, String fileName) {
-      try {
-        print('📥 Triggering download: $fileName');
-        
-        final anchorElement = html.AnchorElement(href: url)
-          ..setAttribute('download', fileName)
-          ..style.display = 'none';
-
-        html.document.body!.append(anchorElement);
-        
-        // Click to trigger download
-        anchorElement.click();
-
-        // Remove element after click
-        Future.delayed(const Duration(milliseconds: 100), () {
-          try {
-            anchorElement.remove();
-          } catch (e) {
-            print('Warning: Could not remove anchor element: $e');
-          }
-        });
-        
-        print('✅ Download triggered for: $fileName');
-      } catch (e) {
-        print('❌ Direct download error: $e');
-        throw 'Failed to trigger download: $e';
-      }
+      // Fallback: if already a storage path
+      return url;
     }
 
     Future<void> _approveDocument(DocumentModel document) async {
