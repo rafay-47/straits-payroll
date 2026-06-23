@@ -14,6 +14,7 @@ import '../settings/system_settings_screen.dart';
 import '../documents/document_management_screen.dart';
 import '../reports/reports_screen.dart';
 import '../devices/device_reset_management_screen.dart';
+import '../employees/pin_reset_management_screen.dart';
 
 /// Provider for all employees (admin view, real-time)
 final allEmployeesProvider = StreamProvider<List<UserModel>>((ref) async* {
@@ -437,7 +438,24 @@ class AdminDashboardScreen extends ConsumerWidget {
                       ),
                     ),
                     const SizedBox(width: 16),
-                    const Expanded(child: SizedBox()), // Empty space
+                    Expanded(
+                      child: _buildActionCard(
+                        context,
+                        icon: Icons.lock_reset,
+                        title: 'PIN Reset Requests',
+                        subtitle: 'Manage employee PIN resets',
+                        color: Colors.indigo,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) =>
+                                  const PinResetManagementScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                   ],
                 ),
               ],

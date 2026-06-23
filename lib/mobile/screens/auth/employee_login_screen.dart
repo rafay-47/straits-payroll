@@ -7,6 +7,7 @@ import '../../../shared/services/biometric_service.dart';
 import '../../../shared/services/device_service.dart';
 import '../../../shared/providers/auth_provider.dart';
 import '../employee/employee_dashboard_screen.dart';
+import '../employee/pin_reset_request_screen.dart';
 
 /// Employee login screen with ID and PIN input
 class EmployeeLoginScreen extends ConsumerStatefulWidget {
@@ -452,10 +453,13 @@ class _EmployeeLoginScreenState extends ConsumerState<EmployeeLoginScreen> {
                         alignment: Alignment.centerRight,
                         child: TextButton(
                           onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Forgot PIN? Please contact your supervisor or company admin to reset it.',
+                            final employeeId =
+                                _employeeIdController.text.trim().toUpperCase();
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => PinResetRequestScreen(
+                                  employeeId:
+                                      employeeId.isNotEmpty ? employeeId : null,
                                 ),
                               ),
                             );

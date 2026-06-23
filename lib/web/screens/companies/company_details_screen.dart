@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../shared/services/company_service.dart';
 import '../../../shared/services/storage_service.dart';
+import '../../../shared/services/auth_service.dart';
+import '../../../shared/services/firestore_service.dart';
 import '../../../shared/models/company_model.dart';
 import '../../../shared/models/user_model.dart';
 import '../../../shared/models/attendance_model.dart';
@@ -318,6 +320,38 @@ class _CompanyDetailsScreenState extends ConsumerState<CompanyDetailsScreen> {
                       if (!formKey.currentState!.validate()) return;
                       setDialogState(() => isSaving = true);
                       try {
+                        // Check if the contact email changed.
+                        final oldEmail = company.primaryContact.email.trim().toLowerCase();
+                        final newEmail = emailController.text.trim().toLowerCase();
+                        final emailChanged = newEmail != oldEmail;
+
+                        if (emailChanged) {
+                          // Migrate the company admin user to the new email.
+                          final firestoreService = FirestoreService();
+                          final authService = AuthService();
+
+                          final admin = await firestoreService.getCompanyAdmin(widget.companyId);
+                          if (admin == null) {
+                            throw 'No company admin found for this company.';
+                          }
+
+                          // Create a new Firebase Auth account with the new email.
+                          final tempPassword = authService.generateSecurePassword(length: 12);
+                          final credential = await authService.createAuthAccountWithNewEmail(
+                            email: newEmail,
+                            password: tempPassword,
+                          );
+
+                          // Migrate all Firestore data to the new UID.
+                          await firestoreService.migrateUserToNewUid(
+                            oldUid: admin.uid,
+                            newUid: credential.user!.uid,
+                            newEmail: emailController.text.trim(),
+                          );
+                          // Send password reset so the user can set their own password.
+                          await authService.sendPasswordResetEmail(email: newEmail);
+                        }
+
                         await _companyService.updateCompany(widget.companyId, {
                           'name': nameController.text.trim(),
                           'registrationNumber': regNoController.text.trim().isEmpty
@@ -345,7 +379,13 @@ class _CompanyDetailsScreenState extends ConsumerState<CompanyDetailsScreen> {
                         }
                           Navigator.pop(context);
                           ScaffoldMessenger.of(this.context).showSnackBar(
-                            const SnackBar(content: Text('Company details updated')),
+                            SnackBar(
+                              content: Text(
+                                emailChanged
+                                    ? 'Company details updated. Admin can now log in with the new email. A password reset may be needed.'
+                                    : 'Company details updated',
+                              ),
+                            ),
                           );
                         }
                       } catch (e) {

@@ -15,6 +15,7 @@ class AppConstants {
   static const String attendanceSubcollection = 'attendance';
   static const String documentsSubcollection = 'documents';
   static const String deviceResetRequestsSubcollection = 'deviceResetRequests';
+  static const String pinResetRequestsSubcollection = 'pinResetRequests';
   static const String assignedEmployeesSubcollection = 'assignedEmployees';
   static const String supervisorsSubcollection = 'supervisors';
 
@@ -90,6 +91,21 @@ class AppConstants {
     resetReasonUpgraded,
     resetReasonDamaged,
     resetReasonOther,
+  ];
+
+  // ============================================
+  // PIN RESET REASONS
+  // ============================================
+  static const String pinResetReasonForgot = 'Forgot PIN';
+  static const String pinResetReasonNotWorking = 'PIN not working';
+  static const String pinResetReasonSecurity = 'Security concern';
+  static const String pinResetReasonOther = 'Other';
+
+  static const List<String> pinResetReasons = [
+    pinResetReasonForgot,
+    pinResetReasonNotWorking,
+    pinResetReasonSecurity,
+    pinResetReasonOther,
   ];
 
   // ============================================

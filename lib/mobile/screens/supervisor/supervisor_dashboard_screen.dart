@@ -17,7 +17,7 @@ class SupervisorDashboardScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProvider);
-    final supervisorProject = ref.watch(supervisorProjectProvider);
+    final supervisorProjects = ref.watch(supervisorProjectsProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -226,9 +226,9 @@ class SupervisorDashboardScreen extends ConsumerWidget {
 
               const SizedBox(height: 20),
 
-              // Assigned Project
-              const Text(
-                'Your Assigned Project',
+              // Assigned Projects
+              Text(
+                'Your Assigned Projects',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -238,10 +238,9 @@ class SupervisorDashboardScreen extends ConsumerWidget {
 
               const SizedBox(height: 12),
 
-              Builder(
-                builder: (context) {
-                  final project = supervisorProject;
-                  if (project == null) {
+              supervisorProjects.when(
+                data: (projectList) {
+                  if (projectList.isEmpty) {
                     return Card(
                       child: Padding(
                         padding: const EdgeInsets.all(24),
@@ -255,7 +254,7 @@ class SupervisorDashboardScreen extends ConsumerWidget {
                               ),
                               const SizedBox(height: 12),
                               Text(
-                                'No project assigned',
+                                'No projects assigned',
                                 style: TextStyle(
                                   fontSize: 14,
                                   color: AppColors.textSecondary,
@@ -276,67 +275,84 @@ class SupervisorDashboardScreen extends ConsumerWidget {
                     );
                   }
 
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    child: ListTile(
-                      leading: Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: AppColors.supervisorColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(
-                          Icons.folder,
-                          color: AppColors.supervisorColor,
-                        ),
-                      ),
-                      title: Text(
-                        project.name,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      subtitle: Text(
-                        project.location?.address ?? 'No location',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      trailing: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
+                  return Column(
+                    children: projectList.map((project) {
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        child: ListTile(
+                          leading: Container(
+                            width: 48,
+                            height: 48,
                             decoration: BoxDecoration(
-                              color: AppColors.success.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(4),
+                              color: AppColors.supervisorColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                            child: const Text(
-                              'Active',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: AppColors.success,
-                                fontWeight: FontWeight.w600,
-                              ),
+                            child: const Icon(
+                              Icons.folder,
+                              color: AppColors.supervisorColor,
                             ),
                           ),
-                        ],
-                      ),
-                      onTap: () {
-                        // TODO: Show project details
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                              content: Text('Project: ${project.name}')),
-                        );
-                      },
-                    ),
+                          title: Text(
+                            project.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Text(
+                            project.location?.address ?? 'No location',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                          trailing: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: AppColors.success.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  'Active',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: AppColors.success,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          onTap: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text('Project: ${project.name}')),
+                            );
+                          },
+                        ),
+                      );
+                    }).toList(),
                   );
                 },
+                loading: () => const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                ),
+                error: (error, stack) => Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Center(
+                      child: Text('Error loading projects: $error'),
+                    ),
+                  ),
+                ),
               ),
             ],
           ),

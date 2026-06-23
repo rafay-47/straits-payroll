@@ -817,14 +817,20 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
   }
 
   Future<void> _handleUpdate(FirestoreService firestoreService) async {
-    final currentUser = ref.read(currentUserProvider).value;
     final companyId = widget.userToEdit!.companyId;
     if (companyId == null || companyId.isEmpty) {
       throw 'Company ID missing for this user.';
     }
     final normalizedEmail = _emailController.text.trim().toLowerCase();
     final oldEmail = widget.userToEdit!.email.trim().toLowerCase();
-    if (normalizedEmail != oldEmail) {
+    final emailChanged = normalizedEmail != oldEmail;
+
+    // Track the active UID – changes when email is migrated.
+    String activeUid = widget.userToEdit!.uid;
+    String? newTemporaryPassword;
+
+    if (emailChanged) {
+      // 1. Check the email is not already used by another user in this company.
       final emailAvailable = await firestoreService.isEmailAvailable(
         companyId: companyId,
         email: normalizedEmail,
@@ -833,6 +839,27 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
       if (!emailAvailable) {
         throw 'Email "$normalizedEmail" is already used by another user in this company.';
       }
+
+      // 2. Create a new Firebase Auth account with the new email.
+      final authService = AuthService();
+      final tempPassword = authService.generateSecurePassword(length: 12);
+      final credential = await authService.createAuthAccountWithNewEmail(
+        email: normalizedEmail,
+        password: tempPassword,
+      );
+
+      final newUid = credential.user!.uid;
+
+      // 3. Migrate all Firestore data to the new UID.
+      await firestoreService.migrateUserToNewUid(
+        oldUid: widget.userToEdit!.uid,
+        newUid: newUid,
+        newEmail: _emailController.text.trim(),
+      );
+      activeUid = newUid;
+      // Send password reset so the user can set their own password.
+      await authService.sendPasswordResetEmail(email: normalizedEmail);
+      print('✅ User migrated to new UID: $newUid');
     }
 
     final oldRole = widget.userToEdit!.role;
@@ -878,7 +905,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
           final available = await firestoreService.isCustomIdAvailable(
             companyId: cid,
             customId: newCustom,
-            excludeUserId: widget.userToEdit!.uid,
+            excludeUserId: activeUid,
           );
           if (!available) {
             throw 'Custom ID "$newCustom" already exists in this company.';
@@ -892,7 +919,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
       }
     }
 
-    await firestoreService.updateUser(widget.userToEdit!.uid, updates);
+    await firestoreService.updateUser(activeUid, updates);
     print('✅ User updated: ${widget.userToEdit!.name}');
 
     // Employee project membership cleanup when role changes away from employee.
@@ -900,7 +927,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
       for (final projectId in oldProjectIds) {
         await firestoreService.removeEmployeeFromProjectAssignedList(
           projectId,
-          widget.userToEdit!.uid,
+          activeUid,
         );
       }
       print('✅ Removed previous employee project assignments');
@@ -923,11 +950,11 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
       final added = newProjectIds.difference(oldProjectIds);
       for (final projectId in removed) {
         print('🔄 Removing employee from project assigned list: $projectId');
-        await firestoreService.removeEmployeeFromProjectAssignedList(projectId, widget.userToEdit!.uid);
+        await firestoreService.removeEmployeeFromProjectAssignedList(projectId, activeUid);
       }
       for (final projectId in added) {
         print('✅ Adding employee to project assigned list: $projectId');
-        await firestoreService.addEmployeeToProjectAssignedList(projectId, widget.userToEdit!.uid);
+        await firestoreService.addEmployeeToProjectAssignedList(projectId, activeUid);
       }
       print('✅ Project assigned list sync complete');
     }
@@ -947,7 +974,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
         print('✅ Adding supervisor to project: $projectId');
         await firestoreService.updateProject(
           projectId,
-          {'supervisorId': widget.userToEdit!.uid},
+          {'supervisorId': activeUid},
         );
       }
       print('✅ Project-Supervisor sync complete');

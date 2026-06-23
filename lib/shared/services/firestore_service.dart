@@ -7,6 +7,7 @@ import '../models/project_model.dart';
 import '../models/attendance_model.dart';
 import '../models/document_model.dart';
 import '../models/device_reset_request_model.dart';
+import '../models/pin_reset_request_model.dart';
 import '../models/audit_log_model.dart';
 import '../constants/app_constants.dart';
 
@@ -101,6 +102,135 @@ class FirestoreService {
           .update(updates);
     } catch (e) {
       throw 'Failed to update user: $e';
+    }
+  }
+
+  /// Get the company admin user for a given company.
+  Future<UserModel?> getCompanyAdmin(String companyId) async {
+    try {
+      final snapshot = await _firestore
+          .collection(AppConstants.usersCollection)
+          .where('companyId', isEqualTo: companyId)
+          .where('role', isEqualTo: 'companyadmin')
+          .limit(1)
+          .get();
+
+      if (snapshot.docs.isEmpty) return null;
+      return UserModel.fromMap(snapshot.docs.first.data());
+    } catch (e) {
+      throw 'Failed to get company admin: $e';
+    }
+  }
+
+  /// Migrate a user's Firestore data to a new UID after an email change.
+  ///
+  /// Creates a new Firebase Auth account with the new email, then moves all
+  /// Firestore data from [oldUid] to [newUid] and updates every reference
+  /// that pointed at the old UID.
+  Future<void> migrateUserToNewUid({
+    required String oldUid,
+    required String newUid,
+    required String newEmail,
+  }) async {
+    try {
+      final usersRef = _firestore.collection(AppConstants.usersCollection);
+      final oldDoc = await usersRef.doc(oldUid).get();
+      if (!oldDoc.exists) {
+        throw 'Original user document not found';
+      }
+
+      final oldData = oldDoc.data()!;
+
+      // 1. Build the new user document with updated uid & email.
+      final newData = Map<String, dynamic>.from(oldData)
+        ..['uid'] = newUid
+        ..['email'] = newEmail
+        ..['updatedAt'] = DateTime.now().toIso8601String();
+
+      // 2. Create the new user document.
+      await usersRef.doc(newUid).set(newData);
+
+      // 3. Migrate subcollections: attendance, documents, deviceResetRequests.
+      final subcollections = ['attendance', 'documents', 'deviceResetRequests'];
+      for (final subName in subcollections) {
+        final oldSub = usersRef.doc(oldUid).collection(subName);
+        final snapshot = await oldSub.get();
+        for (final doc in snapshot.docs) {
+          final data = Map<String, dynamic>.from(doc.data());
+          if (data.containsKey('userId')) data['userId'] = newUid;
+          if (data.containsKey('employeeId')) data['employeeId'] = newUid;
+          await usersRef.doc(newUid).collection(subName).doc(doc.id).set(data);
+          await oldSub.doc(doc.id).delete();
+        }
+      }
+
+      // 4. Update project references (assignedEmployeeIds).
+      final assignedProjects = await _firestore
+          .collection(AppConstants.projectsCollection)
+          .where('assignedEmployeeIds', arrayContains: oldUid)
+          .get();
+
+      for (final doc in assignedProjects.docs) {
+        await doc.reference.update({
+          'assignedEmployeeIds': FieldValue.arrayRemove([oldUid]),
+          'assignedEmployeeIds': FieldValue.arrayUnion([newUid]),
+          'updatedAt': DateTime.now().toIso8601String(),
+        });
+
+        // Also update the assignedEmployees subcollection row if present.
+        await doc.reference
+            .collection(AppConstants.assignedEmployeesSubcollection)
+            .doc(oldUid)
+            .get()
+            .then((subDoc) async {
+          if (subDoc.exists) {
+            final subData = Map<String, dynamic>.from(subDoc.data()!);
+            if (subData.containsKey('employeeId')) {
+              subData['employeeId'] = newUid;
+            }
+            await doc.reference
+                .collection(AppConstants.assignedEmployeesSubcollection)
+                .doc(newUid)
+                .set(subData);
+            await doc.reference
+                .collection(AppConstants.assignedEmployeesSubcollection)
+                .doc(oldUid)
+                .delete();
+          }
+        }).catchError((_) {});
+      }
+
+      // 5. Update project supervisorId references.
+      if (oldData['role'] == 'supervisor') {
+        final supervisedProjects = await _firestore
+            .collection(AppConstants.projectsCollection)
+            .where('supervisorId', isEqualTo: oldUid)
+            .get();
+
+        for (final doc in supervisedProjects.docs) {
+          await doc.reference.update({
+            'supervisorId': newUid,
+            'updatedAt': DateTime.now().toIso8601String(),
+          });
+        }
+      }
+
+      // 6. Update employees that reference this user as supervisor.
+      final supervisedEmployees = await usersRef
+          .where('supervisorId', isEqualTo: oldUid)
+          .get();
+
+      for (final doc in supervisedEmployees.docs) {
+        await doc.reference.update({
+          'supervisorId': newUid,
+          'updatedAt': DateTime.now().toIso8601String(),
+        });
+      }
+
+      // 7. Delete the old user document.
+      await usersRef.doc(oldUid).delete();
+    } catch (e) {
+      throw 'Failed to migrate user data: $e';
     }
   }
 
@@ -787,6 +917,35 @@ class FirestoreService {
       return user;
     } catch (e) {
       print('❌ Error looking up employee: $e');
+      rethrow;
+    }
+  }
+
+  /// Look up an employee by employeeId only (no PIN check).
+  /// Used for unauthenticated flows like "Forgot PIN".
+  Future<UserModel?> getEmployeeById({required String employeeId}) async {
+    try {
+      final normalizedInput = employeeId.trim().toUpperCase();
+      if (normalizedInput.isEmpty) return null;
+
+      final snapshot = await _firestore
+          .collection(AppConstants.usersCollection)
+          .where('role', isEqualTo: AppConstants.roleEmployee)
+          .where('employeeId', isEqualTo: normalizedInput)
+          .limit(1)
+          .get();
+
+      if (snapshot.docs.isEmpty) return null;
+
+      final doc = snapshot.docs.first;
+      final data = doc.data();
+      var user = UserModel.fromMap(data);
+      if (user.uid.isEmpty) {
+        user = user.copyWith(uid: doc.id);
+      }
+      return user;
+    } catch (e) {
+      print('❌ Error looking up employee by ID: $e');
       rethrow;
     }
   }
@@ -1667,7 +1826,7 @@ class FirestoreService {
     }
   }
 
-  /// Get attendance by date range (for reports)
+  /// Get attendance by date range (for reports) - filtered by company
   Future<List<AttendanceModel>> getAttendanceByDateRange(
     DateTime startDate,
     DateTime endDate,
@@ -1675,11 +1834,33 @@ class FirestoreService {
     try {
       final allAttendance = <AttendanceModel>[];
       
-      // Get all employees
-      final usersSnapshot = await _firestore
+      // Get current user's companyId for filtering
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) {
+        return [];
+      }
+      
+      final userDoc = await _firestore.collection('users').doc(currentUser.uid).get();
+      if (!userDoc.exists) {
+        return [];
+      }
+      
+      final userData = userDoc.data()!;
+      final role = userData['role'] as String?;
+      final companyId = userData['companyId'] as String?;
+      
+      // Build employee query
+      Query usersQuery = _firestore
           .collection(AppConstants.usersCollection)
-          .where('role', isEqualTo: AppConstants.roleEmployee)
-          .get();
+          .where('role', isEqualTo: AppConstants.roleEmployee);
+      
+      // Apply company filter for non-superadmin users
+      if (role != 'superadmin' && companyId != null) {
+        final companyKeys = await _resolveCompanyFilterKeys(companyId);
+        usersQuery = usersQuery.where('companyId', whereIn: companyKeys.toList());
+      }
+      
+      final usersSnapshot = await usersQuery.get();
 
       // For each employee, get their attendance in date range
       for (final userDoc in usersSnapshot.docs) {
@@ -1707,16 +1888,38 @@ class FirestoreService {
     }
   }
 
-  /// Get attendance by project (for reports)
+  /// Get attendance by project (for reports) - filtered by company
   Future<List<AttendanceModel>> getAttendanceByProject(String projectId) async {
     try {
       final allAttendance = <AttendanceModel>[];
       
-      // Get all employees
-      final usersSnapshot = await _firestore
+      // Get current user's companyId for filtering
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) {
+        return [];
+      }
+      
+      final userDoc = await _firestore.collection('users').doc(currentUser.uid).get();
+      if (!userDoc.exists) {
+        return [];
+      }
+      
+      final userData = userDoc.data()!;
+      final role = userData['role'] as String?;
+      final companyId = userData['companyId'] as String?;
+      
+      // Build employee query
+      Query usersQuery = _firestore
           .collection(AppConstants.usersCollection)
-          .where('role', isEqualTo: AppConstants.roleEmployee)
-          .get();
+          .where('role', isEqualTo: AppConstants.roleEmployee);
+      
+      // Apply company filter for non-superadmin users
+      if (role != 'superadmin' && companyId != null) {
+        final companyKeys = await _resolveCompanyFilterKeys(companyId);
+        usersQuery = usersQuery.where('companyId', whereIn: companyKeys.toList());
+      }
+      
+      final usersSnapshot = await usersQuery.get();
 
       // For each employee, get their attendance for this project
       for (final userDoc in usersSnapshot.docs) {
@@ -2156,6 +2359,179 @@ class FirestoreService {
       );
     } catch (e) {
       throw 'Failed to reset device for user: $e';
+    }
+  }
+
+  // ============================================
+  // PIN RESET REQUEST OPERATIONS
+  // ============================================
+
+  /// Create PIN reset request
+  Future<void> createPinResetRequest(PinResetRequestModel request) async {
+    try {
+      await _firestore
+          .collection(AppConstants.usersCollection)
+          .doc(request.userId)
+          .collection(AppConstants.pinResetRequestsSubcollection)
+          .doc(request.requestId)
+          .set(request.toMap());
+    } catch (e) {
+      throw 'Failed to create PIN reset request: $e';
+    }
+  }
+
+  /// Get PIN reset requests for a specific user
+  Future<List<PinResetRequestModel>> getUserPinResetRequests(String userId) async {
+    try {
+      final snapshot = await _firestore
+          .collection(AppConstants.usersCollection)
+          .doc(userId)
+          .collection(AppConstants.pinResetRequestsSubcollection)
+          .orderBy('requestedAt', descending: true)
+          .get();
+
+      return snapshot.docs
+          .map((doc) => PinResetRequestModel.fromMap(doc.data()))
+          .toList();
+    } catch (e) {
+      throw 'Failed to get PIN reset requests: $e';
+    }
+  }
+
+  /// Stream PIN reset requests for a specific user
+  Stream<List<PinResetRequestModel>> streamUserPinResetRequests(String userId) {
+    return _firestore
+        .collection(AppConstants.usersCollection)
+        .doc(userId)
+        .collection(AppConstants.pinResetRequestsSubcollection)
+        .orderBy('requestedAt', descending: true)
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+            .map((doc) => PinResetRequestModel.fromMap(doc.data()))
+            .toList());
+  }
+
+  /// Stream all pending PIN reset requests for a company
+  Stream<List<PinResetRequestModel>> streamPendingPinResetRequestsForCompany(
+      String companyId) async* {
+    try {
+      final companyKeys = await _resolveCompanyFilterKeys(companyId);
+
+      final usersSnapshot = await _firestore
+          .collection(AppConstants.usersCollection)
+          .where('companyId', whereIn: companyKeys.toList())
+          .where('role', isEqualTo: AppConstants.roleEmployee)
+          .get();
+
+      final allRequests = <PinResetRequestModel>[];
+
+      for (final userDoc in usersSnapshot.docs) {
+        final requestsSnapshot = await _firestore
+            .collection(AppConstants.usersCollection)
+            .doc(userDoc.id)
+            .collection(AppConstants.pinResetRequestsSubcollection)
+            .where('status', isEqualTo: AppConstants.statusPending)
+            .orderBy('requestedAt', descending: true)
+            .get();
+
+        for (final requestDoc in requestsSnapshot.docs) {
+          allRequests.add(PinResetRequestModel.fromMap(requestDoc.data()));
+        }
+      }
+
+      allRequests.sort((a, b) => b.requestedAt.compareTo(a.requestedAt));
+      yield allRequests;
+    } catch (e) {
+      yield [];
+    }
+  }
+
+  /// Stream all PIN reset requests for a company
+  Stream<List<PinResetRequestModel>> streamAllPinResetRequestsForCompany(
+      String companyId) async* {
+    try {
+      final companyKeys = await _resolveCompanyFilterKeys(companyId);
+
+      final usersSnapshot = await _firestore
+          .collection(AppConstants.usersCollection)
+          .where('companyId', whereIn: companyKeys.toList())
+          .where('role', isEqualTo: AppConstants.roleEmployee)
+          .get();
+
+      final allRequests = <PinResetRequestModel>[];
+
+      for (final userDoc in usersSnapshot.docs) {
+        final requestsSnapshot = await _firestore
+            .collection(AppConstants.usersCollection)
+            .doc(userDoc.id)
+            .collection(AppConstants.pinResetRequestsSubcollection)
+            .orderBy('requestedAt', descending: true)
+            .get();
+
+        for (final requestDoc in requestsSnapshot.docs) {
+          allRequests.add(PinResetRequestModel.fromMap(requestDoc.data()));
+        }
+      }
+
+      allRequests.sort((a, b) => b.requestedAt.compareTo(a.requestedAt));
+      yield allRequests;
+    } catch (e) {
+      yield [];
+    }
+  }
+
+  /// Approve PIN reset request and set new PIN
+  Future<void> approvePinResetRequest({
+    required String userId,
+    required String requestId,
+    required String approvedBy,
+    required String newPin,
+  }) async {
+    try {
+      await _firestore
+          .collection(AppConstants.usersCollection)
+          .doc(userId)
+          .collection(AppConstants.pinResetRequestsSubcollection)
+          .doc(requestId)
+          .update({
+        'status': 'approved',
+        'approvedBy': approvedBy,
+        'approvedAt': DateTime.now().toIso8601String(),
+        'reviewedBy': approvedBy,
+        'reviewedAt': DateTime.now().toIso8601String(),
+        'newPin': newPin,
+      });
+
+      // Update the employee's PIN
+      await updateUser(userId, {'pin': newPin});
+    } catch (e) {
+      throw 'Failed to approve PIN reset request: $e';
+    }
+  }
+
+  /// Reject PIN reset request
+  Future<void> rejectPinResetRequest({
+    required String userId,
+    required String requestId,
+    required String rejectedBy,
+    String? rejectionReason,
+  }) async {
+    try {
+      await _firestore
+          .collection(AppConstants.usersCollection)
+          .doc(userId)
+          .collection(AppConstants.pinResetRequestsSubcollection)
+          .doc(requestId)
+          .update({
+        'status': 'rejected',
+        'rejectedBy': rejectedBy,
+        'rejectedAt': DateTime.now().toIso8601String(),
+        'rejectionReason': rejectionReason,
+        'reviewedBy': rejectedBy,
+        'reviewedAt': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      throw 'Failed to reject PIN reset request: $e';
     }
   }
 

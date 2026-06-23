@@ -256,6 +256,35 @@ class AuthService {
     }
   }
 
+  /// Create a new Firebase Auth account with a different email using the
+  /// secondary app. Returns the [UserCredential] of the newly created account.
+  Future<UserCredential> createAuthAccountWithNewEmail({
+    required String email,
+    required String password,
+  }) async {
+    try {
+      final FirebaseApp secondaryApp = await _getOrCreateSecondaryApp();
+      final FirebaseAuth secondaryAuth =
+          FirebaseAuth.instanceFor(app: secondaryApp);
+
+      try {
+        final credential = await secondaryAuth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+        return credential;
+      } finally {
+        try {
+          await secondaryAuth.signOut();
+        } catch (_) {}
+      }
+    } on FirebaseAuthException catch (e) {
+      throw _handleAuthException(e);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   /// Returns an existing secondary Firebase app or initialises a new one.
   /// The secondary app reuses the default app's Firebase options.
   Future<FirebaseApp> _getOrCreateSecondaryApp() async {

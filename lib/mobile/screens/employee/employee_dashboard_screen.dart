@@ -8,6 +8,7 @@ import '../../../shared/providers/project_provider.dart';
 import '../../../shared/providers/attendance_provider.dart';
 import 'check_in_screen.dart';
 import 'device_reset_request_screen.dart';
+import 'pin_reset_request_screen.dart';
 import 'attendance_history_screen.dart';
 
 /// Employee dashboard screen
@@ -322,7 +323,22 @@ class _EmployeeDashboardScreenState extends ConsumerState<EmployeeDashboardScree
                       },
                     ),
                   ),
-                  const Expanded(child: SizedBox()),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildActionButton(
+                      context,
+                      icon: Icons.lock_reset,
+                      label: 'Reset PIN',
+                      color: AppColors.error,
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const PinResetRequestScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                 ],
               ),
 
