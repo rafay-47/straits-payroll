@@ -435,7 +435,7 @@ class _EmployeeManagementScreenState
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
-                            user.role.toUpperCase(),
+                            user.roleDisplayName,
                             style: TextStyle(
                               color: _getRoleColor(user.role),
                               fontWeight: FontWeight.bold,
@@ -528,6 +528,7 @@ class _EmployeeManagementScreenState
   Color _getRoleColor(String role) {
     switch (role.toLowerCase()) {
       case 'admin':
+      case 'companyadmin':
         return AppColors.adminColor;
       case 'supervisor':
         return AppColors.supervisorColor;
@@ -541,6 +542,7 @@ class _EmployeeManagementScreenState
   IconData _getRoleIcon(String role) {
     switch (role.toLowerCase()) {
       case 'admin':
+      case 'companyadmin':
         return Icons.admin_panel_settings;
       case 'supervisor':
         return Icons.supervisor_account;
@@ -655,7 +657,7 @@ class _EmployeeManagementScreenState
                 _buildDetailRow('Full Name', user.name),
                 _buildDetailRow('Email', user.email),
                 _buildDetailRow('Phone', user.phoneNumber ?? 'N/A'),
-                _buildDetailRow('Role', user.role.toUpperCase()),
+                _buildDetailRow('Role', user.roleDisplayName),
                 _buildDetailRow('Employee ID', _getEmployeeIdText(user)),
                 _buildDetailRow('System ID', user.systemGeneratedId ?? 'N/A'),
                 _buildDetailRow('Custom ID', user.customId ?? 'N/A'),
@@ -996,6 +998,9 @@ class _EmployeeManagementScreenState
 
     // Never allow deleting platform super admin from this screen.
     if (targetRole == 'superadmin') return false;
+
+    // Never allow deleting company admins/admins from this screen.
+    if (targetRole == 'companyadmin' || targetRole == 'admin') return false;
 
     // Users cannot delete their own account.
     if (currentUser != null && target.uid == currentUser.uid) return false;

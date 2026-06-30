@@ -132,7 +132,7 @@ class _EmployeeApprovalScreenState
                                       borderRadius: BorderRadius.circular(12),
                                     ),
                                     child: Text(
-                                      user.role.toUpperCase(),
+                                      user.roleDisplayName,
                                       style: TextStyle(
                                         color: user.role.toLowerCase() == 'supervisor'
                                             ? AppColors.supervisorColor

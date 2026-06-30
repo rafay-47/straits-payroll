@@ -11,8 +11,9 @@ import '../../../shared/constants/app_colors.dart';
 /// Dialog for Adding/Editing Employee or Supervisor
 class AddEmployeeDialog extends ConsumerStatefulWidget {
   final UserModel? userToEdit;
+  final String? companyId;
 
-  const AddEmployeeDialog({Key? key, this.userToEdit}) : super(key: key);
+  const AddEmployeeDialog({Key? key, this.userToEdit, this.companyId}) : super(key: key);
 
   @override
   ConsumerState<AddEmployeeDialog> createState() => _AddEmployeeDialogState();
@@ -49,6 +50,9 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
 
     if (_isEditMode) {
       _selectedRole = widget.userToEdit!.role;
+      if (_selectedRole == 'admin') {
+        _selectedRole = 'companyadmin';
+      }
       _selectedProjectIds.addAll(widget.userToEdit!.assignedProjectIds);
       if (_selectedProjectIds.isEmpty &&
           widget.userToEdit!.assignedProjectId != null) {
@@ -157,7 +161,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
                         RadioListTile<String>(
                           title: const Text('Admin'),
                           subtitle: const Text('Full system access'),
-                          value: 'admin',
+                          value: 'companyadmin',
                           groupValue: _selectedRole,
                           onChanged: (value) {
                             setState(() {
@@ -222,7 +226,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
                 const SizedBox(height: 16),
 
                 // Password (only for supervisor/admin and new accounts)
-                if (!_isEditMode && (_selectedRole == 'supervisor' || _selectedRole == 'admin'))
+                 if (!_isEditMode && (_selectedRole == 'supervisor' || _selectedRole == 'admin' || _selectedRole == 'companyadmin'))
                   Column(
                     children: [
                       TextFormField(
@@ -236,7 +240,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
                         ),
                         obscureText: true,
                         validator: (value) {
-                          if (_selectedRole == 'supervisor' || _selectedRole == 'admin') {
+                          if (_selectedRole == 'supervisor' || _selectedRole == 'admin' || _selectedRole == 'companyadmin') {
                             if (value == null || value.isEmpty) {
                               return 'Please enter password';
                             }
@@ -423,7 +427,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      if (_selectedRole == 'supervisor' || _selectedRole == 'admin')
+                      if (_selectedRole == 'supervisor' || _selectedRole == 'admin' || _selectedRole == 'companyadmin')
                         Text(
                           currentUser != null && currentUser.isSupervisor
                               ? '• Firebase Auth account created (email/password)\n'
@@ -603,7 +607,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
             content: Text(
               _isEditMode 
                   ? 'User updated successfully' 
-                  : '${_selectedRole.toUpperCase()} account created successfully',
+                  : '${_getRoleDisplayName(_selectedRole)} account created successfully',
             ),
             backgroundColor: Colors.green,
           ),
@@ -654,7 +658,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
       throw 'User session not found. Please login again.';
     }
     
-    final companyId = currentUser.companyId;
+    final companyId = widget.companyId ?? currentUser.companyId;
     if (companyId == null || companyId.isEmpty) {
       throw 'Company ID not found. Please contact support.';
     }
@@ -787,11 +791,11 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
     ref.invalidate(supervisorProjectProvider);
 
     print('');
-    print('🎉 ${_selectedRole.toUpperCase()} ACCOUNT CREATED SUCCESSFULLY!');
+    print('🎉 ${_getRoleDisplayName(_selectedRole).toUpperCase()} ACCOUNT CREATED SUCCESSFULLY!');
     print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     print('Name: ${newUser.name}');
     print('Email: ${newUser.email}');
-    print('Role: ${newUser.role}');
+    print('Role: ${newUser.roleDisplayName}');
     if (employeeId != null) {
       print('Employee ID: $employeeId');
     }
@@ -805,7 +809,7 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
     print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     print('');
 
-    if (_selectedRole == 'supervisor' || _selectedRole == 'admin') {
+    if (_selectedRole == 'supervisor' || _selectedRole == 'admin' || _selectedRole == 'companyadmin') {
       print('✅ Supervisor/Admin can now login with:');
       print('   Email: ${newUser.email}');
       print('   Password: [as entered]');
@@ -986,6 +990,23 @@ class _AddEmployeeDialogState extends ConsumerState<AddEmployeeDialog> {
     ref.invalidate(employeeProjectsProvider);
     ref.invalidate(supervisorProjectsProvider);
     ref.invalidate(supervisorProjectProvider);
+  }
+
+  String _getRoleDisplayName(String role) {
+    switch (role.toLowerCase()) {
+      case 'companyadmin':
+        return 'Company Admin';
+      case 'admin':
+        return 'Admin';
+      case 'supervisor':
+        return 'Supervisor';
+      case 'employee':
+        return 'Employee';
+      case 'superadmin':
+        return 'Super Admin';
+      default:
+        return role;
+    }
   }
 }
 

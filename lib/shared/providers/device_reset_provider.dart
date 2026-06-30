@@ -5,6 +5,8 @@ import '../models/device_info_model.dart'; // This is DeviceInfo
 import '../models/user_model.dart';
 import '../services/firestore_service.dart';
 import '../services/device_service.dart';
+import '../services/company_service.dart';
+import '../models/company_model.dart';
 import '../constants/app_constants.dart';
 import 'auth_provider.dart';
 
@@ -70,14 +72,36 @@ final pendingDeviceResetRequestsProvider = StreamProvider.autoDispose<List<Devic
   return Stream.value([]);
 });
 
+/// Provider for company settings of the current user
+final currentUserCompanySettingsProvider = FutureProvider.autoDispose<CompanySettings?>((ref) async {
+  final currentUser = ref.watch(currentUserProvider).value;
+  if (currentUser == null || currentUser.companyId == null) {
+    return null;
+  }
+  final companyService = CompanyService();
+  final company = await companyService.getCompany(currentUser.companyId!);
+  return company?.settings;
+});
+
 /// Provider to check if user can request device reset
 final canRequestDeviceResetProvider = FutureProvider.autoDispose.family<bool, String>((ref, userId) async {
   final firestoreService = ref.watch(firestoreServiceProvider);
 
   try {
+    // Get user document to get their company ID
+    final user = await firestoreService.getUser(userId);
+    if (user == null || user.companyId == null) {
+      return false;
+    }
+
+    // Get company settings
+    final companyService = CompanyService();
+    final company = await companyService.getCompany(user.companyId!);
+    final limit = company?.settings.maxDeviceResetsPerMonth ?? AppConstants.maxDeviceResetsPerMonth;
+
     return await firestoreService.canRequestDeviceReset(
       userId,
-      AppConstants.maxDeviceResetsPerMonth,
+      limit,
     );
   } catch (e) {
     throw 'Failed to check device reset eligibility: $e';
@@ -122,9 +146,18 @@ class DeviceResetController extends StateNotifier<AsyncValue<void>> {
       final uuid = ref.read(uuidProvider);
 
       // Check if user can request reset
+      final userDoc = await firestoreService.getUser(userId);
+      if (userDoc == null || userDoc.companyId == null) {
+        throw 'User or company not found';
+      }
+
+      final companyService = CompanyService();
+      final company = await companyService.getCompany(userDoc.companyId!);
+      final limit = company?.settings.maxDeviceResetsPerMonth ?? AppConstants.maxDeviceResetsPerMonth;
+
       final canRequest = await firestoreService.canRequestDeviceReset(
         userId,
-        AppConstants.maxDeviceResetsPerMonth,
+        limit,
       );
 
       if (!canRequest) {

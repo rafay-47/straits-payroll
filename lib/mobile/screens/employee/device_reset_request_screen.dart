@@ -96,6 +96,7 @@ class _DeviceResetRequestScreenState extends ConsumerState<DeviceResetRequestScr
       loading: () => const AsyncValue.loading(),
       error: (e, s) => AsyncValue.error(e, s),
     );
+    final companySettingsAsync = ref.watch(currentUserCompanySettingsProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -129,6 +130,7 @@ class _DeviceResetRequestScreenState extends ConsumerState<DeviceResetRequestScr
                   error: (error, stack) => Text('Error: $error'),
                   data: (canRequest) {
                     if (!canRequest) {
+                      final limit = companySettingsAsync.value?.maxDeviceResetsPerMonth ?? AppConstants.maxDeviceResetsPerMonth;
                       return Card(
                         color: Colors.orange.shade50,
                         child: Padding(
@@ -143,7 +145,7 @@ class _DeviceResetRequestScreenState extends ConsumerState<DeviceResetRequestScr
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                'You have reached the maximum number of device reset requests for this month (${AppConstants.maxDeviceResetsPerMonth}).',
+                                'You have reached the maximum number of device reset requests for this month ($limit).',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(color: Colors.grey.shade700),
                               ),

@@ -215,8 +215,11 @@ class AuthService {
     required String role, // 'companyadmin' or 'supervisor'
   }) async {
     try {
+      // Normalize 'admin' role to 'companyadmin' for compatibility
+      final targetRole = role == 'admin' ? 'companyadmin' : role;
+
       // Validate role
-      if (role != 'companyadmin' && role != 'supervisor') {
+      if (targetRole != 'companyadmin' && targetRole != 'supervisor') {
         throw 'Invalid role for company user';
       }
 

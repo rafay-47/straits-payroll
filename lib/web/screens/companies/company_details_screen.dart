@@ -17,6 +17,7 @@ import '../../../shared/widgets/company_logo_widget.dart';
 import '../reports/services/report_service.dart';
 import '../reports/widgets/download_helper_stub.dart'
     if (dart.library.html) '../reports/widgets/download_helper_web.dart';
+import '../employees/add_employee_dialog.dart';
 
 /// Company details screen for super admin
 class CompanyDetailsScreen extends ConsumerStatefulWidget {
@@ -96,6 +97,9 @@ class _CompanyDetailsScreenState extends ConsumerState<CompanyDetailsScreen> {
     final regNoController = TextEditingController(text: company.registrationNumber ?? '');
     final addressController = TextEditingController(text: company.address ?? '');
     final notesController = TextEditingController(text: company.notes ?? '');
+    final maxDeviceResetsController = TextEditingController(
+      text: company.settings.maxDeviceResetsPerMonth.toString(),
+    );
     final formKey = GlobalKey<FormState>();
     bool isSaving = false;
     bool allowSuperAdminView = company.allowSuperAdminView;
@@ -289,6 +293,22 @@ class _CompanyDetailsScreenState extends ConsumerState<CompanyDetailsScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
+                    // Max Device Resets Per Month
+                    TextFormField(
+                      controller: maxDeviceResetsController,
+                      decoration: const InputDecoration(
+                        labelText: 'Max Device Resets Per Month *',
+                        prefixIcon: Icon(Icons.device_unknown),
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.number,
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) return 'Required';
+                        if (int.tryParse(v) == null) return 'Must be a valid integer';
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       title: const Text('Allow Super Admin Troubleshooting'),
@@ -352,6 +372,10 @@ class _CompanyDetailsScreenState extends ConsumerState<CompanyDetailsScreen> {
                           await authService.sendPasswordResetEmail(email: newEmail);
                         }
 
+                        final updatedSettings = company.settings.copyWith(
+                          maxDeviceResetsPerMonth: int.tryParse(maxDeviceResetsController.text) ?? company.settings.maxDeviceResetsPerMonth,
+                        );
+
                         await _companyService.updateCompany(widget.companyId, {
                           'name': nameController.text.trim(),
                           'registrationNumber': regNoController.text.trim().isEmpty
@@ -364,7 +388,7 @@ class _CompanyDetailsScreenState extends ConsumerState<CompanyDetailsScreen> {
                               ? null
                               : notesController.text.trim(),
                           'logo': logoUrl,
-                            'allowSuperAdminView': allowSuperAdminView,
+                          'allowSuperAdminView': allowSuperAdminView,
                           'primaryContact': {
                             'name': contactNameController.text.trim(),
                             'email': emailController.text.trim(),
@@ -372,6 +396,7 @@ class _CompanyDetailsScreenState extends ConsumerState<CompanyDetailsScreen> {
                                 ? null
                                 : phoneController.text.trim(),
                           },
+                          'settings': updatedSettings.toMap(),
                         });
                         if (context.mounted) {
                         if (widget.onCompanyChanged != null) {
@@ -511,6 +536,8 @@ class _CompanyDetailsScreenState extends ConsumerState<CompanyDetailsScreen> {
                     (company.settings.employeeIdCounter + 1).toString()),
                 _buildInfoRow('Max Check-ins/Day',
                     company.settings.maxCheckInsPerDay.toString()),
+                _buildInfoRow('Max Device Resets/Month',
+                    company.settings.maxDeviceResetsPerMonth.toString()),
                 _buildInfoRow('Geofence Radius',
                     '${company.settings.geofenceRadius}m'),
                 _buildInfoRow('Working Hours',
@@ -2033,6 +2060,22 @@ class _CompanyUsersScreenState extends ConsumerState<CompanyUsersScreen>
                 ),
               ],
             ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          showDialog(
+            context: context,
+            builder: (context) => AddEmployeeDialog(companyId: widget.companyId),
+          ).then((created) {
+            if (created == true && mounted) {
+              _loadUsers();
+            }
+          });
+        },
+        backgroundColor: Colors.indigo,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add),
+        label: const Text('Add User'),
+      ),
     );
   }
 

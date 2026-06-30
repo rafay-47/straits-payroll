@@ -125,7 +125,7 @@ final isSupervisorProvider = Provider<bool>((ref) {
 /// Is admin provider
 final isAdminProvider = Provider<bool>((ref) {
   final role = ref.watch(userRoleProvider);
-  return role == 'admin';
+  return role == 'admin' || role == 'companyadmin' || role == 'superadmin';
 });
 
 // ============================================

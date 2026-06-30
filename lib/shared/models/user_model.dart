@@ -57,6 +57,22 @@ class UserModel {
   bool get isEmployee => role == 'employee';
   bool get isSupervisor => role == 'supervisor';
   bool get isAdmin => role == 'admin' || role == 'companyadmin'; // Backward compatibility
+  String get roleDisplayName {
+    switch (role.toLowerCase()) {
+      case 'companyadmin':
+        return 'Company Admin';
+      case 'admin':
+        return 'Admin';
+      case 'supervisor':
+        return 'Supervisor';
+      case 'employee':
+        return 'Employee';
+      case 'superadmin':
+        return 'Super Admin';
+      default:
+        return role;
+    }
+  }
   bool get isPending => status == 'pending';
   bool get isApproved => status == 'approved' || status == 'active';
   bool get isActive => status == 'active';

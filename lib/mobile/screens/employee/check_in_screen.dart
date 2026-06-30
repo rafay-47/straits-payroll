@@ -684,7 +684,7 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
         if (expectedTagId != null &&
             expectedTagId.isNotEmpty &&
             expectedTagId.toUpperCase().trim() != tagId.toUpperCase().trim()) {
-          throw 'NFC tag does not match this project.\nExpected: $expectedTagId\nScanned: $tagId';
+          throw 'NFC Tag Does Not Match';
         }
       }
 
@@ -802,7 +802,7 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
       if (expectedTagId != null && expectedTagId.isNotEmpty) {
         // Case-insensitive comparison (NTAG UIDs are hex strings)
         if (expectedTagId.toUpperCase().trim() != tagId.toUpperCase().trim()) {
-          throw 'NFC tag does not match this project.\nExpected: $expectedTagId\nScanned: $tagId\n\nPlease use the correct NFC tag for this project.';
+          throw 'NFC Tag Does Not Match';
         }
       }
       // If no tag ID is configured, accept any tag (setup flexibility)
@@ -1163,7 +1163,7 @@ class _CheckInScreenState extends ConsumerState<CheckInScreen> {
         final expectedTagId = nonNullProject.nfcTagId;
         if (expectedTagId != null && expectedTagId.isNotEmpty) {
           if (expectedTagId.toUpperCase().trim() != tagId.toUpperCase().trim()) {
-            throw 'NFC tag does not match this project.\nExpected: $expectedTagId\nScanned: $tagId';
+            throw 'NFC Tag Does Not Match';
           }
         }
         validationNote = 'NFC Tag: $tagId';

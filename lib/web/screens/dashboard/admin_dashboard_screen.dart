@@ -538,7 +538,7 @@ class AdminDashboardScreen extends ConsumerWidget {
                                           ),
                                         ),
                                         title: Text(
-                                            '${u.name} (${u.role.toUpperCase()})'),
+                                            '${u.name} (${u.roleDisplayName})'),
                                         subtitle: Text(
                                             'ID: ${u.displayId ?? "N/A"}'),
                                         trailing: Row(
